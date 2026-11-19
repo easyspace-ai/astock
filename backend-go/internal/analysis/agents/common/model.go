@@ -1,9 +1,13 @@
 package common
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"sync"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
@@ -26,15 +30,44 @@ func TryChatModel(ctx context.Context) (model.ToolCallingChatModel, error) {
 		return nil, fmt.Errorf("OPENAI_MODEL is required")
 	}
 
-	cm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
+	cfg := &openai.ChatModelConfig{
 		APIKey:  apiKey,
 		BaseURL: baseURL,
 		Model:   modelName,
-	})
+	}
+	if os.Getenv("AI_DEBUG_DUMP") == "1" {
+		cfg.HTTPClient = &http.Client{Transport: &dumpTransport{base: http.DefaultTransport}}
+	}
+
+	cm, err := openai.NewChatModel(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("openai chat model: %w", err)
 	}
 	return cm, nil
+}
+
+// dumpTransport 在 AI_DEBUG_DUMP=1 时把出站请求体落盘，用于排查工具 schema 问题。
+// 默认关闭，不影响线上行为。
+type dumpTransport struct {
+	base http.RoundTripper
+	mu   sync.Mutex
+}
+
+func (t *dumpTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		body, err := io.ReadAll(req.Body)
+		if err == nil {
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			t.mu.Lock()
+			f, ferr := os.OpenFile("/tmp/ai_req_dump.json", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+			if ferr == nil {
+				_, _ = f.Write(body)
+				_ = f.Close()
+			}
+			t.mu.Unlock()
+		}
+	}
+	return t.base.RoundTrip(req)
 }
 
 // NewChatModel 创建默认的 ChatModel（供各 Agent 构建使用；未配置密钥时 panic）

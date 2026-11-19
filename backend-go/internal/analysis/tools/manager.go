@@ -43,6 +43,8 @@ func InitGlobalTools(dataDir string) error {
 		// 归一化对工具执行逻辑无影响，且幂等。
 		for i, t := range allTools {
 			allTools[i] = NormalizeToolSchema(t)
+			// 每个 agent 绑定时都拿到独立的 schema 副本，避免并发绑定互相踩坏。
+			allTools[i] = WithIsolatedSchema(allTools[i])
 		}
 
 		globalTools = allTools
