@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TSP 新外壳结构示意</title>
+<style>
+  /* 令牌与 docs/ui-refactor-plan.md §5 对应，数值为示意 */
+  .app {
+    --nav: #0d0e10;
+    --paper: #151618;
+    --raised: #1a1b1d;
+    --sunken: #111214;
+    --floating: #1f2022;
+    --fg: #ecedef;
+    --fg-2: #c3c4c6;
+    --fg-3: #9e9fa1;
+    --fg-4: #545557;
+    --line-subtle: rgba(236,237,239,.07);
+    --line: rgba(236,237,239,.16);
+    --line-strong: rgba(236,237,239,.26);
+    --accent: #8b78d8;
+    --accent-solid: #8b78d8;
+    --accent-text: #b29fff;
+    --accent-tint: rgba(139,92,246,.14);
+    --bull: #f04438;
+    --bear: #12b76a;
+    --warn: #f2af48;
+    --danger: #fa6863;
+    --fill-hover: rgba(236,237,239,.06);
+    --fill-selected: rgba(236,237,239,.09);
+    --radius-panel: 12px;
+    --radius-card: 10px;
+    --radius-ctl: 8px;
+    --gutter: 16px;
+    --row: 34px;
+    --pad: 12px;
+    --fs: 12.5px;
+    --shadow-1: inset 0 0 0 1px var(--line), 0 1px 2px rgba(0,0,0,.3);
+  }
+  .app[data-theme="light"] {
+    --nav: #f1f2f4; --paper: #fcfdfe; --raised: #ffffff; --sunken: #f4f5f6; --floating: #ffffff;
+    --fg: #17191b; --fg-2: #424446; --fg-3: #5d5f60; --fg-4: #a3a4a6;
+    --line-subtle: rgba(23,25,27,.07); --line: rgba(23,25,27,.14); --line-strong: rgba(23,25,27,.24);
+    --accent-solid: #6f49ca; --accent-text: #6942c3; --accent-tint: rgba(111,73,202,.1);
+    --fill-hover: rgba(23,25,27,.045); --fill-selected: rgba(23,25,27,.07);
+    --shadow-1: inset 0 0 0 1px var(--line), 0 1px 2px rgba(0,0,0,.05);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: #060607;
+    color: #ecedef;
+    font-family: Inter, "HarmonyOS Sans SC", "PingFang SC", system-ui, sans-serif;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    padding: 18px;
+  }
+  .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+  .app {
+    height: calc(100vh - 104px);
+    min-height: 660px;
+    display: flex;
+    flex-direction: column;
+    background: var(--nav);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 40px 120px -40px rgba(0,0,0,.9);
+  }
+
+  /* 顶栏 */
+  .topbar {
+    height: 44px; flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 0 10px 0 14px;
+    border-bottom: 1px solid var(--line-subtle);
+  }
+  .brand { display: flex; align-items: center; gap: 8px; min-width: 186px; }
+  .logo {
+    width: 22px; height: 22px; border-radius: 6px;
+    background: linear-gradient(145deg, #a78bfa, #7c3aed);
+    display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #fff;
+  }
+  .brand b { font-size: 12px; letter-spacing: .12em; font-weight: 600; color: var(--fg); }
+  .brand span { font-size: 9px; color: var(--fg-3); letter-spacing: .04em; }
+
+  .search {
+    display: flex; align-items: center; gap: 8px;
+    flex: 0 1 224px; min-width: 150px;
+    height: 28px; padding: 0 8px;
+    border-radius: var(--radius-ctl);
+    background: var(--sunken);
+    box-shadow: inset 0 0 0 1px var(--line-subtle);
+    color: var(--fg-3); font-size: 11px;
+  }
+  .search > span:nth-child(2) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .search .kbd { margin-left: auto; }
+  .kbd {
+    font-size: 10px; line-height: 16px; padding: 0 5px; border-radius: 4px; color: var(--fg-3);
+    box-shadow: inset 0 0 0 1px var(--line), inset 0 -1px 0 var(--line);
+    background: var(--raised);
+  }
+
+  .market { display: flex; gap: 2px; margin-left: 2px; min-width: 0; overflow: hidden; }
+  .idx { display: flex; align-items: baseline; gap: 6px; padding: 0 8px; height: 28px; color: var(--fg-2); flex: none; white-space: nowrap; }
+  .idx small { font-size: 10px; color: var(--fg-3); }
+  .idx .pct { font-size: 11px; }
+  .up { color: var(--bull); }
+  .down { color: var(--bear); }
+
+  .tb-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .tb-btn {
+    height: 28px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px;
+    border-radius: var(--radius-ctl); background: transparent; color: var(--fg-2);
+    border: none; font-size: 11px; cursor: pointer;
+  }
+  .tb-btn:hover { background: var(--fill-hover); color: var(--fg); }
+  .avatar {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--accent-tint); color: var(--accent-text);
+    display: grid; place-items: center; font-size: 10px; font-weight: 700;
+    box-shadow: inset 0 0 0 1px rgba(139,92,246,.3);
+  }
+
+  /* 主体 */
+  .body { flex: 1; min-height: 0; display: flex; gap: 6px; padding: 6px; }
+
+  /* 导航 */
+  .nav {
+    width: 224px; flex: none; display: flex; flex-direction: column;
+    background: var(--nav); border-radius: var(--radius-panel);
+    padding: 8px 8px 6px;
+  }
+  .nav-sec { padding: 6px 8px 4px; font-size: 10px; letter-spacing: .08em; color: var(--fg-4); }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    height: 30px; padding: 0 8px; border-radius: 7px;
+    color: var(--fg-2); font-size: 12px;
+  }
+  .nav-item .ico { width: 16px; height: 16px; opacity: .6; flex: none; display: grid; place-items: center; font-size: 13px; }
+  .nav-item .badge { margin-left: auto; font-size: 9px; padding: 1px 5px; border-radius: 999px; background: rgba(242,175,72,.12); color: var(--warn); }
+  .nav-item .badge.accent { background: var(--accent-tint); color: var(--accent-text); }
+  .nav-item .num { margin-left: auto; font-size: 10px; color: var(--fg-3); }
+  .nav-item.active { background: var(--fill-selected); color: var(--fg); font-weight: 500; }
+  .nav-item.active .ico { opacity: 1; color: var(--accent-text); }
+  .nav-item:hover { background: var(--fill-hover); }
+  .nav-group { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; color: var(--fg-3); font-size: 12px; }
+  .nav-group .chev { margin-left: auto; opacity: .5; }
+
+  .nav-spacer { flex: 1; }
+
+  .rt { display: flex; align-items: center; gap: 8px; padding: 8px; border-top: 1px solid var(--line-subtle); margin: 0 -2px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px rgba(139,92,246,.7); flex: none; }
+  .rt .t { font-size: 11px; font-weight: 500; color: var(--fg); }
+  .rt .s { font-size: 10px; color: var(--fg-3); margin-top: 2px; }
+  .switch { margin-left: auto; width: 30px; height: 17px; border-radius: 999px; background: var(--accent-solid); position: relative; box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); }
+  .switch i { position: absolute; right: 2px; top: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; }
+  .nav-foot { display: flex; align-items: center; gap: 8px; padding: 8px 4px 2px; border-top: 1px solid var(--line-subtle); margin: 0 -2px; color: var(--fg-3); font-size: 11px; }
+
+  /* 内容面板（页面原样） */
+  .content {
+    flex: 1; min-width: 0; display: flex; flex-direction: column;
+    background: var(--paper); border-radius: var(--radius-panel);
+    box-shadow: var(--shadow-1); overflow: hidden;
+  }
+  .page-head {
+    height: 48px; flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 0 var(--gutter); border-bottom: 1px solid var(--line-subtle);
+  }
+  .page-head h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.01em; color: var(--fg); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border-radius: 6px;
+    font-size: 10px; color: var(--fg-3); background: var(--sunken);
+    box-shadow: inset 0 0 0 1px var(--line-subtle);
+    flex: none; white-space: nowrap;
+  }
+  .page-head .right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .btn {
+    height: 28px; padding: 0 10px; border-radius: var(--radius-ctl); font-size: 11px;
+    color: var(--fg-2); background: transparent; border: none;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer;
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .btn:hover { background: var(--fill-hover); color: var(--fg); }
+
+  .toolbar {
+    height: 40px; flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 0 var(--gutter); border-bottom: 1px solid var(--line-subtle);
+  }
+  .seg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--sunken); box-shadow: inset 0 0 0 1px var(--line-subtle); }
+  .seg b { font-weight: 500; font-size: 11px; padding: 3px 9px; border-radius: 6px; color: var(--fg-3); }
+  .seg b.on { background: var(--raised); color: var(--fg); box-shadow: 0 0 0 1px var(--line); }
+  .ghost { height: 26px; padding: 0 8px; border-radius: 6px; font-size: 11px; color: var(--fg-3); display: inline-flex; align-items: center; gap: 5px; }
+  .ghost:hover { background: var(--fill-hover); color: var(--fg); }
+  .toolbar .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+
+  .page-body { flex: 1; min-height: 0; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    position: sticky; top: 0; z-index: 10; height: 28px; padding: 0 var(--pad);
+    background: var(--sunken); font-size: 10px; font-weight: 500; color: var(--fg-3);
+    text-align: left; border-bottom: 1px solid var(--line-subtle); white-space: nowrap;
+  }
+  thead th.r, td.r { text-align: right; }
+  tbody td {
+    height: var(--row); padding: 0 var(--pad); font-size: var(--fs); color: var(--fg-2);
+    border-bottom: 1px solid var(--line-subtle); white-space: nowrap;
+  }
+  tbody tr:hover td { background: var(--fill-hover); }
+  td .sym { color: var(--fg-3); font-size: 10px; margin-left: 6px; }
+  td .name { color: var(--fg); }
+  .tag { display: inline-block; font-size: 9px; line-height: 14px; padding: 0 4px; border-radius: 4px; background: var(--accent-tint); color: var(--accent-text); }
+  .tag.gray { background: var(--fill-hover); color: var(--fg-3); }
+  .price { color: var(--fg); }
+
+  .statusbar {
+    height: 28px; flex: none; display: flex; align-items: center; gap: 12px;
+    padding: 0 var(--gutter); border-top: 1px solid var(--line-subtle);
+    font-size: 10px; color: var(--fg-3);
+  }
+  .statusbar .right { margin-left: auto; display: flex; gap: 12px; }
+
+  /* 令牌样张 */
+  .tokens {
+    margin-top: 14px; padding: 16px 18px; background: #0d0e10; border-radius: 12px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.06);
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px 26px;
+    color: #c3c4c6;
+  }
+  .tok h4 { margin: 0 0 8px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #9e9fa1; font-weight: 600; }
+  .sw { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11px; }
+  .sw i { width: 26px; height: 18px; border-radius: 5px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); flex: none; }
+  .sw code { color: #9e9fa1; font-size: 10px; }
+  .type div { margin-bottom: 5px; display: flex; align-items: baseline; gap: 8px; }
+  .type .spec { font-size: 10px; color: #9e9fa1; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .btns .btn { background: transparent; color: #c3c4c6; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+  .btns .btn.solid { background: #8b78d8; color: #fff; box-shadow: none; }
+  .btns .btn.danger { background: rgba(250,104,99,.12); color: #fa6863; box-shadow: inset 0 0 0 1px rgba(250,104,99,.35); }
+  .iconrow { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; color: #c3c4c6; }
+  .iconrow .g { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .iconrow .g span { font-size: 9px; color: #9e9fa1; }
+  .glyph { display: grid; place-items: center; border-radius: 6px; background: rgba(255,255,255,.04); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+
+  .note { margin: 12px 4px 0; font-size: 11px; color: #9e9fa1; line-height: 1.8; }
+  .note b { color: #c3c4c6; font-weight: 500; }
+
+  .demo-bar { display: flex; gap: 6px; margin-bottom: 10px; align-items: center; }
+  .demo-bar .lbl { font-size: 11px; color: #8b8d90; margin-right: 6px; }
+  .demo-bar .btn { background: #151618; color: #c3c4c6; box-shadow: inset 0 0 0 1px rgba(255,255,255,.1); }
+  .demo-bar .btn.on { background: #8b78d8; color: #fff; box-shadow: none; }
+
+  @media (max-width: 1200px) {
+    .idxstrip { display: none; }
+    .market .idx:nth-child(n+3) { display: none; }
+    .tb-right .chip { display: none; }
+  }
+  @media (max-width: 1080px) {
+    .brand { min-width: 150px; }
+    .search { width: 170px; }
+    .tb-btn { padding: 0 7px; }
+  }
+  @media (max-width: 980px) {
+    .nav { width: 56px; padding: 8px 6px; }
+    .nav-item span, .nav-group span, .nav-sec, .idxstrip, .rt .t, .rt .s, .nav-foot span, .nav-item .badge { display: none; }
+    .nav-item { justify-content: center; padding: 0; }
+    .market { display: none; }
+    .search { width: 150px; }
+    .tokens { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="demo-bar">
+  <span class="lbl">外壳结构示意 · 页面内容原样保留</span>
+  <button class="btn on" data-theme="dark">暗色</button>
+  <button class="btn" data-theme="light">亮色</button>
+</div>
+
+<div class="app" id="app" data-theme="dark">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">T</div>
+      <div>
+        <b>TSP</b><br />
+        <span>QUANT TERMINAL</span>
+      </div>
+    </div>
+
+    <div class="search">
+      <span>⌕</span>
+      <span>搜索标的、策略、因子</span>
+      <span class="kbd">⌘K</span>
+    </div>
+
+    <div class="market">
+      <div class="idx"><small>上证</small><span class="mono up">3697.52</span><span class="mono pct up">+0.19%</span></div>
+      <div class="idx"><small>深成</small><span class="mono down">11534.38</span><span class="mono pct down">-1.19%</span></div>
+      <div class="idx"><small>创业板</small><span class="mono down">2638.23</span><span class="mono pct down">-1.71%</span></div>
+    </div>
+
+    <div class="tb-right">
+      <span class="chip"><span class="dot" style="width:6px;height:6px"></span> 行情运行中</span>
+      <button class="tb-btn">数据</button>
+      <button class="tb-btn">AI</button>
+      <button class="tb-btn">主题</button>
+      <div class="avatar">L</div>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <aside class="nav">
+      <div class="nav-sec">工作台</div>
+      <div class="nav-item"><span class="ico">◧</span><span>看板</span></div>
+      <div class="nav-item active"><span class="ico">★</span><span>自选</span><span class="num mono">42</span></div>
+      <div class="nav-item"><span class="ico">⌁</span><span>策略</span><span class="num mono">25</span></div>
+      <div class="nav-item"><span class="ico">◈</span><span>因子</span></div>
+      <div class="nav-item"><span class="ico">↺</span><span>回测</span></div>
+      <div class="nav-item"><span class="ico">◔</span><span>市场环境</span></div>
+
+      <div class="nav-sec" style="margin-top:6px">扩展</div>
+      <div class="nav-group"><span class="ico">▤</span><span>个股分析</span><span class="chev">⌄</span></div>
+      <div class="nav-item"><span class="ico">≋</span><span>连板梯队</span><span class="badge">EXT</span></div>
+      <div class="nav-item"><span class="ico">◎</span><span>概念分析</span><span class="badge">EXT</span></div>
+      <div class="nav-item"><span class="ico">▣</span><span>监控中心</span><span class="badge">12</span></div>
+      <div class="nav-item"><span class="ico">◫</span><span>模拟盘</span><span class="badge accent">EXT</span></div>
+
+      <div class="nav-spacer"></div>
+
+      <div class="rt">
+        <span class="dot"></span>
+        <div><div class="t">实时行情</div><div class="s">全市场 · 运行中</div></div>
+        <div class="switch"><i></i></div>
+      </div>
+      <div class="nav-foot"><span>⚙</span><span>管理后台</span><span class="mono" style="margin-left:auto;font-size:10px">v0.3.36</span></div>
+    </aside>
+
+    <!-- 内容面板：以下即为现有页面，内部布局与组件保持不变 -->
+    <main class="content">
+      <div class="page-head">
+        <h1>自选</h1>
+        <span class="chip">42 只 · 3 组</span>
+        <div class="right">
+          <button class="btn">添加</button>
+          <button class="btn">导入</button>
+          <button class="btn">刷新</button>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="seg"><b class="on">全部</b><b>核心持仓</b><b>观察</b></div>
+        <span class="ghost">ETF</span>
+        <span class="ghost">按涨跌幅</span>
+        <div class="right">
+          <span class="chip">2026-11-17 15:00</span>
+          <span class="ghost">列设置</span>
+        </div>
+      </div>
+
+      <div class="page-body">
+        <table>
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th class="r">最新价</th>
+              <th class="r">涨跌幅</th>
+              <th class="r">涨跌额</th>
+              <th class="r">成交额</th>
+              <th class="r">换手</th>
+              <th class="r">量比</th>
+              <th class="r">MA20 偏离</th>
+              <th>标签</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="name">中际旭创</span><span class="sym mono">300308</span></td>
+              <td class="r mono price">148.20</td>
+              <td class="r mono up">+6.32%</td>
+              <td class="r mono up">+8.81</td>
+              <td class="r mono">62.4 亿</td>
+              <td class="r mono">4.18%</td>
+              <td class="r mono">1.86</td>
+              <td class="r mono up">+7.1%</td>
+              <td><span class="tag">持仓</span></td>
+            </tr>
+            <tr>
+              <td><span class="name">寒武纪</span><span class="sym mono">688256</span></td>
+              <td class="r mono price">728.00</td>
+              <td class="r mono up">+3.44%</td>
+              <td class="r mono up">+24.20</td>
+              <td class="r mono">41.8 亿</td>
+              <td class="r mono">2.06%</td>
+              <td class="r mono">1.42</td>
+              <td class="r mono up">+4.6%</td>
+              <td><span class="tag">核心</span></td>
+            </tr>
+            <tr>
+              <td><span class="name">宁德时代</span><span class="sym mono">300750</span></td>
+              <td class="r mono price">386.40</td>
+              <td class="r mono down">-1.27%</td>
+              <td class="r mono down">-4.96</td>
+              <td class="r mono">28.6 亿</td>
+              <td class="r mono">0.74%</td>
+              <td class="r mono">0.92</td>
+              <td class="r mono down">-2.2%</td>
+              <td><span class="tag gray">观察</span></td>
+            </tr>
+            <tr>
+              <td><span class="name">贵州茅台</span><span class="sym mono">600519</span></td>
+              <td class="r mono price">1421.00</td>
+              <td class="r mono down">-0.68%</td>
+              <td class="r mono down">-9.70</td>
+              <td class="r mono">18.2 亿</td>
+              <td class="r mono">0.21%</td>
+              <td class="r mono">0.86</td>
+              <td class="r mono down">-1.4%</td>
+              <td><span class="tag gray">观察</span></td>
+            </tr>
+            <tr>
+              <td><span class="name">东方财富</span><span class="sym mono">300059</span></td>
+              <td class="r mono price">26.18</td>
+              <td class="r mono up">+2.31%</td>
+              <td class="r mono up">+0.59</td>
+              <td class="r mono">96.5 亿</td>
+              <td class="r mono">5.62%</td>
+              <td class="r mono">2.14</td>
+              <td class="r mono up">+3.8%</td>
+              <td><span class="tag">持仓</span></td>
+            </tr>
+            <tr>
+              <td><span class="name">沪深300ETF</span><span class="sym mono">510300</span></td>
+              <td class="r mono price">4.382</td>
+              <td class="r mono up">+0.41%</td>
+              <td class="r mono up">+0.018</td>
+              <td class="r mono">12.4 亿</td>
+              <td class="r mono">0.38%</td>
+              <td class="r mono">1.03</td>
+              <td class="r mono up">+0.9%</td>
+              <td><span class="tag gray">ETF</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="statusbar">
+        <span>数据：本地日 K · enriched 2026-11-17</span>
+        <span>口径：前复权</span>
+        <div class="right"><span>6 / 42</span><span>仅本地</span></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="tokens">
+  <div class="tok">
+    <h4>Surface 分层</h4>
+    <div class="sw"><i style="background:#0d0e10"></i><span>navigator</span><code>#0d0e10</code></div>
+    <div class="sw"><i style="background:#151618"></i><span>paper</span><code>#151618</code></div>
+    <div class="sw"><i style="background:#1a1b1d"></i><span>raised</span><code>#1a1b1d</code></div>
+    <div class="sw"><i style="background:#111214"></i><span>sunken</span><code>#111214</code></div>
+    <div class="sw"><i style="background:#1f2022"></i><span>floating</span><code>#1f2022</code></div>
+  </div>
+
+  <div class="tok">
+    <h4>语义色</h4>
+    <div class="sw"><i style="background:#8b78d8"></i><span>accent</span><code>#8b78d8</code></div>
+    <div class="sw"><i style="background:#f04438"></i><span>bull / 涨</span><code>#f04438</code></div>
+    <div class="sw"><i style="background:#12b76a"></i><span>bear / 跌</span><code>#12b76a</code></div>
+    <div class="sw"><i style="background:#f2af48"></i><span>warning</span><code>#f2af48</code></div>
+    <div class="sw"><i style="background:#fa6863"></i><span>danger</span><code>#fa6863</code></div>
+  </div>
+
+  <div class="tok type">
+    <h4>字号尺度（壳层）</h4>
+    <div><span style="font-size:16px;font-weight:600">16</span><span class="spec">panel title</span></div>
+    <div><span style="font-size:13px">13</span><span class="spec">body</span></div>
+    <div><span style="font-size:12px">12</span><span class="spec">nav / label</span></div>
+    <div><span style="font-size:11px;color:#9e9fa1">11</span><span class="spec">topbar caption</span></div>
+    <div><span style="font-size:10px;color:#9e9fa1">10</span><span class="spec">section · 大写</span></div>
+  </div>
+
+  <div class="tok">
+    <h4>图标与控件</h4>
+    <div class="iconrow">
+      <div class="g"><div class="glyph" style="width:20px;height:20px;font-size:13px">◧</div><span>20</span></div>
+      <div class="g"><div class="glyph" style="width:16px;height:16px;font-size:11px">★</div><span>16</span></div>
+      <div class="g"><div class="glyph" style="width:14px;height:14px;font-size:9px">⌁</div><span>14</span></div>
+      <div class="g"><div class="glyph" style="width:12px;height:12px;font-size:8px">◈</div><span>12</span></div>
+      <span class="kbd">⌘K</span>
+    </div>
+    <div class="btns">
+      <button class="btn solid">主操作</button>
+      <button class="btn">次操作</button>
+      <button class="btn danger">危险</button>
+      <span class="tag">标签</span>
+    </div>
+  </div>
+</div>
+
+<p class="note">
+  <b>边界：</b>只有顶栏、导航、内容面板外框与配色/字体/图标属于本次改造；内容面板里的页面头部、工具条、表格、图表和卡片保持现有布局与组件，
+  仅继承新的表面色与文字色。<b>右侧没有新增面板</b>，页面宽度语义不变。
+</p>
+
+<script>
+  var app = document.getElementById('app');
+  document.querySelectorAll('.demo-bar .btn[data-theme]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      app.setAttribute('data-theme', btn.getAttribute('data-theme'));
+      document.querySelectorAll('.demo-bar .btn[data-theme]').forEach(function (b) {
+        b.classList.toggle('on', b === btn);
+      });
+    });
+  });
+</script>
+
+</body>
+</html>

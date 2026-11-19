@@ -1,0 +1,17 @@
+package bear
+
+import (
+	"aistock/backend/internal/analysis/agents/common"
+	"aistock/backend/internal/analysis/prompts"
+	"context"
+
+	"github.com/cloudwego/eino/adk"
+)
+
+// NewAgent 创建空头研究员 Agent
+func NewAgent(ctx context.Context) (adk.Agent, error) {
+	return common.NewAgentBuilder("空头研究员", "专业的风险分析专家，善于发现潜在风险，用数据支撑谨慎观点。").
+		WithInstruction(prompts.Resolve("bear", bearResearcherInstruction)).
+		WithModel(common.NewDeepThinkModel()).
+		Build(ctx)
+}

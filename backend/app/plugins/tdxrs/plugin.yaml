@@ -1,0 +1,29 @@
+# tdxrs — 通达信免费行情 Rust 客户端 (PyO3 进程内直连, https://pypi.org/project/tdxrs/)
+# pip install tdxrs; 无 sidecar、无 Key、无积分。runtime: python。
+# 拓扑: TSP backend ──PyO3──▶ tdxrs(Rust) ──TCP──▶ 通达信行情服务器, 无 sidecar/无端口/无预热。
+# 与 tdxquant 的区别: 免费协议直连, 无 Key/积分; 除权因子用同一套交易所公式自算
+# (实测 calc_fq_factors 分页会算错旧事件, 只作交叉校验), 分钟深度 90 交易日,
+# 且额外覆盖 ETF/指数/板块/逐笔/分时。
+name: tdxrs
+display_name: "通达信 (tdxrs 自建直连)"
+runtime: python
+entry: app.plugins.tdxrs.provider:TdxRsProvider
+check: app.plugins.tdxrs.provider:availability
+# adj_factor 可声明(calc_fq_factors 实测含 ETF); financial 不具备 → 自动回退 TickFlow
+# full_minute 不声明: 上游无批量端点, 逐标的增量一轮 3-4 分钟, 打不住 6s 节奏
+datasets: [realtime, depth5, daily, adj_factor, minute]
+description: >-
+  (通达信免费行情协议, Rust/PyO3 进程内客户端, 无 Key、无积分、无 sidecar)。
+  覆盖全 A 实时快照、五档盘口、原始日K、除权因子(含 ETF)、1 分钟K;
+  另提供指数/ETF/板块/逐笔/分时等扩展接口。财务与全量分钟未接入, 自动回退 TickFlow。
+install_hint: "依赖 tdxrs 由后端安装: 点击卡片「安装依赖」, 或手动 pip install tdxrs>=0.6.10"
+homepage: "https://github.com/injoyai/tdxrs"
+usage_notes:
+  - "实时快照: **60 只/批**(协议硬上限, 超出会被客户端静默截断); 全市场 5225 只 = 87 批, 实测一轮 **3.7 秒**"
+  - "五档盘口: 随快照返回, 不产生额外请求; **指数无盘口**(协议该位置为无效字节, 已跳过)"
+  - "日K: 原始价(不复权), 单标的一次取全历史(实测 6044 根 / 0.59 秒), volume 股→手"
+  - "除权因子: `calc_fq_factors` 直接给单事件因子 + 每股分红, 无需本地配价推导; 含 ETF"
+  - "分钟K: 1m 逐标的, 深度约 **90 交易日**(21600 根); 仅股票/ETF, 指数走扩展接口"
+  - "全市场分钟未接入: 上游无批量端点, 逐标的约 3-4 分钟一轮, 超出盘中节奏"
+  - "已知坑: 退市/无效代码回包 code 会被服务器替换(如 600355 回 600839), 已按回包代码校验剔除"
+  - "股票池: 沪+深 5225 只(12h 缓存); 北交所代码表在部分服务器返回 E2005, 该市场缺席(显式代码仍可取数)"

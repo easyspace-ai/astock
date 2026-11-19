@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="theme-color" content="#6F49CA" />
+    <script>
+      // 预渲染主题脚本: 首屏前设置 html.dark, 避免亮暗闪烁 (FOUC)。
+      // 默认暗色; 用户切过亮色后 (localStorage tf-theme=light) 保持亮色。
+      (function () {
+        try {
+          if (localStorage.getItem('tf-theme') !== 'light') {
+            document.documentElement.classList.add('dark')
+          }
+          // 品牌主题包同理: 首帧前挂上 data-brand, 避免刷新时先闪默认紫
+          var brand = localStorage.getItem('tf-brand-theme')
+          if (brand && ['ocean', 'jade', 'amber', 'rose'].indexOf(brand) >= 0) {
+            document.documentElement.setAttribute('data-brand', brand)
+          }
+          // theme-color 跟品牌包 + 明暗走 (暗/亮两色), 与 lib/brandTheme.ts 的
+          // BRAND_THEMES 同步; 首帧就设好, 避免浏览器 chrome 先闪默认紫
+          var brandColors = {
+            craft: ['#8B78D8', '#6F49CA'],
+            ocean: ['#3B82F6', '#2563EB'],
+            jade: ['#0E9E7C', '#0B8467'],
+            amber: ['#C2701A', '#A85A07'],
+            rose: ['#DB5A82', '#BE2E5C'],
+          }
+          var pair = brandColors[brand] || brandColors.craft
+          var isDark = document.documentElement.classList.contains('dark')
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', isDark ? pair[0] : pair[1])
+        } catch (e) {
+          document.documentElement.classList.add('dark')
+        }
+      })()
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>财富引擎</title>
+    <!-- 字体已自托管 (@fontsource, 见 main.tsx), 不再引用第三方 CDN 样式表 -->
+  </head>
+  <body class="bg-base text-foreground">
+    <div id="root"></div>
+    <script>
+      // 预渲染缩放脚本: #root transform scale (方案详见 src/lib/pageZoom.ts —
+      // 不用 CSS zoom, zoom≠1 会让 ECharts 鼠标命中偏移)。
+      // 放在 #root 之后、main.tsx (module 延迟执行) 之前: 首帧绘制前生效, 无尺寸跳变。
+      (function () {
+        var z = 1
+        try {
+          var raw = localStorage.getItem('tf-page-zoom')
+          var v = raw == null ? 1 : JSON.parse(raw)
+          if (typeof v === 'number' && v >= 0.8 && v <= 1.5) z = v
+        } catch (e) { /* 解析失败保底不缩放 */ }
+        if (z !== 1) {
+          var root = document.getElementById('root')
+          root.style.transformOrigin = '0 0'
+          root.style.transform = 'scale(' + z + ')'
+          root.style.width = (100 / z) + '%'
+          root.style.height = (100 / z) + '%'
+        }
+      })()
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
