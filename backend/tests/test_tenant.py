@@ -59,6 +59,44 @@ def test_json_report_store_isolated(data_dir):
     assert store_g.list_reports() == []
 
 
+def test_ai_reports_module_isolated_between_accounts(data_dir):
+    """财务分析报告的真实读写在请求线程内完成, 必须落到当前账号目录。
+
+    存储层隔离由 JsonReportStore 提供, 这里验证 ai_reports 这个共享单例确实
+    按调用时的租户上下文解析路径 (而不是固化了某个账号的目录)。
+    """
+    from app.services import ai_reports
+
+    tenant.set_current_user(7)
+    saved = ai_reports.save_report({"symbol": "600519.SH", "name": "贵州茅台", "content": "A"})
+    assert saved["id"]
+    assert (data_dir / "user_data" / "users" / "7" / "ai_reports.json").exists()
+
+    tenant.set_current_user(8)
+    assert ai_reports.list_reports() == []
+    assert not (data_dir / "user_data" / "users" / "8" / "ai_reports.json").exists()
+
+    tenant.set_current_user(7)
+    assert [r["id"] for r in ai_reports.list_reports()] == [saved["id"]]
+    assert ai_reports.delete_report(saved["id"]) is True
+    assert ai_reports.list_reports() == []
+
+
+def test_ai_reports_legacy_global_file_not_visible_to_accounts(data_dir):
+    """升级前的全局文件不会被任意账号"继承" —— 谁都不该看到上一任的数据。"""
+    from app.services import ai_reports
+
+    legacy = data_dir / "user_data"
+    legacy.mkdir(parents=True, exist_ok=True)
+    (legacy / "ai_reports.json").write_text(
+        '[{"id": "rpt_1", "symbol": "000001.SZ", "content": "legacy", "created_at": "2026-01-01T00:00:00"}]',
+        encoding="utf-8",
+    )
+    for uid in (7, 8):
+        tenant.set_current_user(uid)
+        assert ai_reports.list_reports() == []
+
+
 def test_preferences_remain_global(data_dir):
     """偏好设置是系统级配置(定时任务/推送/SMTP), 不随账号隔离。"""
     tenant.set_current_user(7)

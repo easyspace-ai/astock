@@ -18,6 +18,8 @@ import { LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS, strategyE
 import { boardTag } from '@/components/stock-table/primitives'
 import { resolveWatchlistGroupColor } from '@/lib/watchlist-group-colors'
 import { markSeen, resetBadge, leaveMonitorPage } from '@/lib/monitorBadge'
+import { usePermissions } from '@/lib/useAccount'
+import { PERM } from '@/lib/permissions'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { toNavItems, type NavItem } from '@/lib/listNav'
@@ -143,6 +145,11 @@ export function Monitor() {
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmClearRules, setConfirmClearRules] = useState(false)
 
+  // 清空是全局写操作(单文件没有 owner, 等于删所有人的记录), 后端限 admin.data_manage;
+  // 没有该权限的账号不显示按钮, 避免点了才 403。
+  const { can } = usePermissions()
+  const canClearAlerts = can(PERM.dataManage)
+
   // 全局 ext 字段配置 (监控中心个股通知带行业/概念标签)
   const { data: prefs } = usePreferences()
   // 实时行情可用性: mode=none 表示当前生效数据源完全无法提供实时行情
@@ -256,7 +263,7 @@ export function Monitor() {
                   <Tags className="h-3.5 w-3.5" />
                 </button>
                 <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{total}</span>
-                {total > 0 && (
+                {total > 0 && canClearAlerts && (
                   <button
                     onClick={() => setConfirmClear(true)}
                     className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-danger/10 hover:text-danger cursor-pointer"

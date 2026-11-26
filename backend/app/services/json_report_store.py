@@ -8,9 +8,13 @@
 差异通过构造参数固化: filename(存储文件名) / max_reports(保留上限) / id_prefix(id 前缀) /
 id_with_symbol(id 是否带 symbol 后缀 —— 大盘复盘无 symbol)。
 
-存储文件: data/user_data/{filename} (数组, 按 created_at 降序), 保留最近 max_reports 条,
-超出自动裁剪最旧的。写入走临时文件 + os.replace 原子替换, 避免进程中断留下半截 JSON。
+存储文件: {tenant.priv_base()}/{filename} (数组, 按 created_at 降序), 保留最近
+max_reports 条, 超出自动裁剪最旧的。租户模式下落在
+data/user_data/users/<uid>/, 全局模式落在 data/user_data/。写入走临时文件 +
+os.replace 原子替换, 避免进程中断留下半截 JSON。
 读写同时可能来自请求线程与调度线程, 故加实例锁串行化写路径。
+注意: 路径在每次调用时按 ContextVar 现算, 因此后台线程(无租户上下文)写入会
+落到全局目录 —— 需要按账号归属的后台产物必须显式传 uid, 不能依赖现场推断。
 """
 from __future__ import annotations
 

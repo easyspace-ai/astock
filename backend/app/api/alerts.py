@@ -5,11 +5,18 @@ import random
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.services import alert_store
+from app.api.permissions import require_page_access, require_permission
+from app.services import alert_store, rbac
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
+
+# 读接口保持开放: 告警 toast 全局挂载, 受限账号也要能收到自己的提示。
+# 但「清空全部」「造演示数据」是会影响所有账号的写操作, 必须限权:
+# 单文件存储下没有 owner, 一个普通账号清空就等于删掉所有人的记录。
+_REQUIRE_ADMIN = Depends(require_permission(rbac.ADMIN_DATA_MANAGE))
+_REQUIRE_DEV = Depends(require_page_access(rbac.PAGE_DEV))
 
 
 def _data_dir(request: Request) -> Path:
@@ -48,9 +55,9 @@ def list_alerts(
     return {"alerts": events, "total": total}
 
 
-@router.delete("")
+@router.delete("", dependencies=[_REQUIRE_ADMIN])
 def clear_alerts(request: Request):
-    """清空全部触发记录。"""
+    """清空全部触发记录 (仅数据管理权限; 单文件存储没有 owner, 清空等于删所有人)。"""
     n = alert_store.clear(_data_dir(request))
     return {"ok": True, "cleared": n}
 
@@ -94,7 +101,7 @@ _DEMO_TEMPLATES = [
 ]
 
 
-@router.post("/seed")
+@router.post("/seed", dependencies=[_REQUIRE_DEV])
 def seed_demo_alerts(request: Request, count: int = 12, recent: bool = True):
     """生成演示触发记录 (Dev 页用)。
 

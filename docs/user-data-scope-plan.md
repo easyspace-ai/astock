@@ -36,7 +36,7 @@
 | # | 数据 | 前台入口 | 当前落盘 | 共享后果 | 优先级 |
 | --- | --- | --- | --- | --- | --- |
 | 1 | 监控规则（价格/信号/异动/日期/策略） | `/monitor`，自选/个股/策略页的规则编辑器 | `user_data/monitor_rules/*.json` | 规则互相可见、互相触发；A 删规则等于删 B 的 | P0 |
-| 2 | 告警触发记录 | `/monitor`、`/dev` | `user_data/alerts.jsonl` | 全站一个文件；`DELETE /api/alerts` 清空所有账号记录；Dev 页能造演示数据污染所有人 | P0 |
+| 2 | 告警触发记录 | `/monitor`、`/dev` | `user_data/alerts.jsonl` | 全站一个文件；`DELETE /api/alerts` 清空所有账号记录；Dev 页能造演示数据污染所有人 | P0（**读放开、清空/演示已限权，按 owner 切待规则先行**，见 §1.3） |
 | 3 | 持仓批次（止盈止损/到期提醒） | `/lots` | `user_data/lots/lot_*.json` | 成本价、数量、买入日期全部互见；还会派生全局监控规则 | P0 |
 | 4 | 策略池 + 策略库分组/归档 | `/screener` | `user_data/strategy_pool.json` | A 的池决定 B 扫什么；归档状态互相覆盖 | P0 |
 | 5 | 策略调参覆盖 | 策略/回测/挖掘 | `user_data/strategy_overrides/{sid}.json` | 改一次参数，所有人的回测与页面缓存一起变 | P0 |
@@ -88,7 +88,7 @@
 已经发生的具体后果：
 
 - **定时复盘**：`jobs/daily_pipeline.py` 的 `_run_scheduled_review` → `market_recap_reports.save_report()` 写到 `user_data/ai_market_recaps.json`；而 `/api/market-recap/reports` 在用户上下文里读 `users/<uid>/ai_market_recaps.json`。**用户在复盘页永远看不到定时生成的那份。**
-- **告警**：`alert_store` 注释里已写死这个理由（「后台引擎无账号上下文，故保持全局单文件」）。这是把架构缺陷写成了设计。
+- **告警**：`alert_store` 注释里已写死这个理由（「后台引擎无账号上下文，故保持全局单文件」）。这是把架构缺陷写成了设计。更根本的是：**产生告警的 `monitor_rules` 本身是全局的（没有 owner 字段，`JsonDefinitionStore` 直接用 `data_dir`）**，所以即便给 `AlertEvent` 加上 `owner_id`，后台引擎也填不出真值——归属顺序必须是「规则按用户 → 告警按用户」，只改告警存储等于把所有人的历史记录藏起来。
 - **监控引擎**：启动时 `monitor_engine.set_rules(load_all(全局))`，一份内存规则集服务所有人；运行中新增/删除规则只影响这一份。
 - **模拟盘/守护/挖掘**：`paper_watch`、`guardian_schedule`、`mining_schedule` 全部按全局目录读写。
 
@@ -153,6 +153,21 @@
 4. 事件与记录带 `owner_id`：`AlertEvent` 加 `owner_id`，`alert_store` 按 owner 分文件（或加列过滤），`DELETE /api/alerts` 只删自己的。
 
 验收：单账号部署行为与现在完全一致（`priv_base()` 回退全局，兼容旧数据）；两账号并行时各写各的文件，日志能看出 owner。
+
+### 阶段 0.5：告警的写边界（已完成 2026-11-26）
+
+按 owner 切告警的前置是规则先按用户（§3.1），在那之前先堵住「写操作影响别人」这一层，改动面小且语义确定：
+
+| 端点 | 处理 | 理由 |
+| --- | --- | --- |
+| `GET /api/alerts` | 保持开放 | 告警 toast 全局挂载，受限账号也要能收到提示 |
+| `DELETE /api/alerts`（清空全部） | `admin.data_manage` | 单文件没有 owner，普通账号清空等于删掉所有人的记录 |
+| `POST /api/alerts/seed`（造演示数据） | `page.dev` | 演示数据会落盘并 SSE 推给所有在线客户端 |
+| `DELETE /api/alerts/{ts}`（单条） | 暂保持开放 | 单条删除伤害有限；真正的边界要等 owner 落地才能按归属判定 |
+
+前端同步：`/monitor` 的「清空」与 `/dev` 的「清空全部」按 `admin.data_manage` 显示，无权限时不渲染（避免点了才 403）。
+
+验证：`tests/test_alerts_api.py` 5 条（含「403 后记录仍在」「受限账号仍可读」）；`tests/test_tenant.py` 新增 3 条 AI 报告隔离回归。
 
 ### 阶段 1：私有资产迁移（P0 清单）
 

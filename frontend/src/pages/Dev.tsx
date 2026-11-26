@@ -6,6 +6,8 @@ import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { QK } from '@/lib/queryKeys'
 import { resetBadge } from '@/lib/monitorBadge'
+import { usePermissions } from '@/lib/useAccount'
+import { PERM } from '@/lib/permissions'
 
 // ── 分钟K探测 (迁移自 MinuteDataProbe) ─────────────────
 interface ProbeResult {
@@ -187,6 +189,9 @@ function SeedPanel() {
   const [count, setCount] = useState(12)
   const [recent, setRecent] = useState(true)
   const [msg, setMsg] = useState('')
+  // 「清空全部」会删掉所有账号的告警记录, 后端限 admin.data_manage; 无权限则不显示。
+  const { can } = usePermissions()
+  const canClearAlerts = can(PERM.dataManage)
 
   const seedMut = useMutation({
     mutationFn: () => api.alertSeed(count, recent),
@@ -268,14 +273,14 @@ function SeedPanel() {
             {seedMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
             生成演示数据
           </button>
-          <button
+          {canClearAlerts && <button
             onClick={() => clearMut.mutate()}
             disabled={clearMut.isPending}
             className="flex items-center gap-1.5 rounded-btn border border-danger/40 bg-danger/10 px-4 py-1.5 text-sm font-medium text-danger hover:bg-danger/20 disabled:opacity-50 cursor-pointer"
           >
             {clearMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
             清空全部
-          </button>
+          </button>}
         </div>
       </div>
 

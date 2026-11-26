@@ -1,6 +1,9 @@
 """AI 财务分析报告持久化存储。
 
-存储位置: data/user_data/ai_reports.json (数组,按 created_at 降序)
+存储位置: {tenant.priv_base()}/ai_reports.json (数组,按 created_at 降序)
+  - 租户模式(邮箱账号登录): data/user_data/users/<uid>/ai_reports.json
+  - 全局模式(面板密码/无账号): data/user_data/ai_reports.json
+  即报告按账号隔离, 读取时由 app.services.tenant 的请求级上下文解析目录。
 保留最近 MAX_REPORTS 条;超出自动裁剪最旧的。
 
 存储机制统一委托给 JsonReportStore(原子写 + 实例锁), 本模块只固化
