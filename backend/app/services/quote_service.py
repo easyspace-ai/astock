@@ -1565,11 +1565,16 @@ class QuoteService:
                     paper_watch_events = [ev for ev in rule_events if is_paper_watch_event(ev)]
                     rule_events = [ev for ev in rule_events if not is_paper_watch_event(ev)]
                     if rule_events:
+                        # 规则按账号存 → 事件带命名空间 id; 出引擎先剥前缀并写回 owner,
+                        # 后面落盘/SSE 都按账号分流 (共享旧规则 owner=None, 行为不变)。
+                        from app.strategy import monitor_rules as mr_store
+
+                        rule_events = mr_store.assign_owners(rule_events)
                         rule_events = self._format_extension_notifications(rule_events)
-                        # 落盘到 alerts.jsonl
+                        # 落盘: 按 owner 分文件
                         try:
                             from app.services import alert_store
-                            alert_store.append_many(
+                            alert_store.append_owned(
                                 self._app_state.repo.store.data_dir, rule_events,
                             )
                         except Exception as e:  # noqa: BLE001
@@ -1590,6 +1595,8 @@ class QuoteService:
                                 "severity": ev.get("severity", "info"),
                                 "conditions": ev.get("conditions") or [],
                                 "logic": ev.get("logic") or "and",
+                                # 前端按 owner 过滤: 只弹自己账号的告警 (None=共享)
+                                "owner_id": ev.get("owner_id"),
                             }
                             for key in (
                                 "sector_kind", "sector_key", "sector_name",
@@ -1952,10 +1959,20 @@ class QuoteService:
                 return
 
             # 反查规则, 过滤出启用推送的事件
+            # 注意: 引擎键是命名空间 id (u<uid>::id), 事件里是裸 id + owner_id,
+            # 必须按 owner 还原键, 否则跨账号后 webhook 一律查不到规则。
+            from app.strategy import monitor_rules as _mr
+
             rules = engine.rules if engine is not None else {}
             enqueued = 0
             for ev in rule_events:
-                rule = rules.get(ev.get("rule_id"))
+                owner = ev.get("owner_id")
+                key = (
+                    _mr.scoped_id(owner, ev.get("rule_id") or "")
+                    if owner is not None
+                    else ev.get("rule_id")
+                )
+                rule = rules.get(key)
                 # webhook_channels 指定本规则需要投递的外部渠道。
                 # 空列表 = 该规则不推送。仅推送「渠道已选 + 对应地址已配置」的组合。
                 channels = rule.get("webhook_channels") if rule else None

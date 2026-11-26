@@ -13,6 +13,7 @@ priv_base() 取「私有数据根目录」。行情数据 (kline/enriched/因子
 from __future__ import annotations
 
 import contextvars
+from contextlib import contextmanager
 from pathlib import Path
 
 from app.config import settings
@@ -29,6 +30,21 @@ def set_current_user(user_id: int | None) -> None:
 
 def current_user_id() -> int | None:
     return _UID.get()
+
+
+@contextmanager
+def user_scope(user_id: int | None):
+    """临时进入某个用户的租户上下文 (后台任务按账号迭代时使用)。
+
+    退出时复位到进入前的 uid —— 嵌套调用安全 (token.reset 而非 set(None)),
+    避免内层把外层账号上下文清掉。线程各自的 ContextVar 互相独立, 因此
+    ``ThreadPoolExecutor`` 里的任务仍需在任务内显式进入本上下文。
+    """
+    token = _UID.set(user_id)
+    try:
+        yield
+    finally:
+        _UID.reset(token)
 
 
 def is_tenant() -> bool:

@@ -304,7 +304,7 @@ export function Layout() {
   })
 
   // SSE: 行情更新时自动刷新相关 queries + 告警通知
-  useQuoteStream(realtimeEnabled, prefs?.sse_refresh_pages)
+  useQuoteStream(realtimeEnabled, prefs?.sse_refresh_pages, undefined, account.data?.id ?? null)
   // 实时 SSE 连接状态 — 断开时底部显示提示, 提示可能漏策略告警
   const streamStatus = useQuoteStreamStatus()
 

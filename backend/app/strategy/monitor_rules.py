@@ -1,9 +1,11 @@
 """监控规则 — 统一的 MonitorRule 模型,覆盖策略/个股信号/个股价格/市场异动四类。
 
 职责:
-  - 从 data/user_data/monitor_rules/*.json 加载规则定义
+  - 从 {私有根}/monitor_rules/*.json 加载规则定义 (私有根见 tenant.priv_base:
+    租户 = user_data/users/<uid>, 全局 = user_data)
   - 校验规则字段合法性
   - 提供 CRUD (load_all / save_one / delete_one)
+  - 提供按 owner 聚合装载 (load_owned / assign_owners), 供监控引擎与告警分流
 
 不知道: 行情评估引擎、API、告警落盘。纯函数 + 文件存储。
 
@@ -20,6 +22,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from app.definitions import JsonDefinitionStore
+from app.services import tenant
 from app.strategy.custom_signals import ALLOWED_FIELDS
 from app.strategy.intraday_signals import uses_intraday_signals
 
@@ -60,26 +63,122 @@ VD_BASIC_FILTER_DEFAULTS: dict = {
 _SIGNAL_PREFIXES = ("signal_", "csg_")
 
 
+# 引擎装载时使用: 聚合各账号规则 (见 load_owned)。
+
+
 # ── 持久化 (镜像 custom_signals.py) ─────────────────────
 # ── 持久化 (统一契约 Store, 收口见 app/definitions.py) ────
 # _RULE_STORE 在 normalize 定义之后构造 (见下), 此处函数体按调用期解析。
 
 
 def load_all(data_dir: Path) -> list[dict]:
-    """读取全部监控规则。损坏的文件被跳过。"""
-    return _RULE_STORE.load_all(data_dir)
+    """读取当前作用域的监控规则 (租户上下文 → 本账号目录; 无租户 → user_data)。"""
+    return _RULE_STORE.load_all(tenant.priv_base(data_dir))
+
+
+def load_shared(data_dir: Path) -> list[dict]:
+    """读取账号系统引入前的全局旧目录 ``user_data/monitor_rules``。
+
+    生产已为空 (2026-11-26 核对), 保留读取仅为向后兼容: 老部署的规则不至于
+    突然消失, 且这类规则没有 owner, 只作为「共享规则」参与评估。
+    """
+    return _RULE_STORE.load_all(Path(data_dir) / "user_data")
 
 
 def load_one(data_dir: Path, rule_id: str) -> dict | None:
-    return _RULE_STORE.load_one(data_dir, rule_id)
+    return _RULE_STORE.load_one(tenant.priv_base(data_dir), rule_id)
 
 
 def save_one(data_dir: Path, rule: dict) -> None:
-    _RULE_STORE.save_one(data_dir, rule)
+    _RULE_STORE.save_one(tenant.priv_base(data_dir), rule)
 
 
 def delete_one(data_dir: Path, rule_id: str) -> bool:
-    return _RULE_STORE.delete_one(data_dir, rule_id)
+    return _RULE_STORE.delete_one(tenant.priv_base(data_dir), rule_id)
+
+
+# ── 归属 (owner) 与引擎命名空间 ──────────────────────────
+# 引擎用 rule["id"] 作为状态字典的键 (_rules/_last_fire/_strategy_pools/...),
+# 不同账号出现同名 id 会互相覆盖。装载进引擎时给每条规则加 ``u<uid>::`` 前缀
+# 隔离; 事件出引擎后立刻剥掉前缀并写回 owner_id, 前端看到的仍是规则原 id。
+OWNER_SEP = "::"
+
+
+def scoped_id(owner: int, rule_id: str) -> str:
+    return f"u{owner}{OWNER_SEP}{rule_id}"
+
+
+def unscope_id(rule_id: str) -> tuple[int | None, str]:
+    """拆 ``u12::mr_x`` → (12, 'mr_x'); 非命名空间 id 原样返回 (None, id)。"""
+    head, sep, tail = str(rule_id).partition(OWNER_SEP)
+    if not sep or not tail or not head.startswith("u"):
+        return None, str(rule_id)
+    try:
+        return int(head[1:]), tail
+    except ValueError:
+        return None, str(rule_id)
+
+
+def user_rule_dirs(data_dir: Path) -> list[tuple[int, Path]]:
+    """扫描 ``user_data/users/<uid>/monitor_rules`` — 目录本身即 owner 清单。"""
+    base = Path(data_dir) / "user_data" / "users"
+    if not base.is_dir():
+        return []
+    out: list[tuple[int, Path]] = []
+    for d in sorted(base.iterdir(), key=lambda p: p.name):
+        if d.is_dir() and d.name.isdigit():
+            out.append((int(d.name), d))
+    return out
+
+
+def load_owned(data_dir: Path) -> list[dict]:
+    """聚合装载: 共享规则 (无 owner) + 各账号规则 (带 __owner 与命名空间 id)。"""
+    rules: list[dict] = [dict(r) for r in load_shared(data_dir)]
+    for uid, _d in user_rule_dirs(data_dir):
+        with tenant.user_scope(uid):
+            for r in load_all(data_dir):
+                rules.append({**r, "id": scoped_id(uid, str(r["id"])), "_owner": uid})
+    return rules
+
+
+def iter_owned(data_dir: Path) -> list[tuple[int | None, dict]]:
+    """逐条返回 (owner, rule) — owner=None 表示旧全局共享规则。
+
+    需要「跨账号批量改写」时用它 (如删策略时停用各账号关联的 strategy 规则),
+    改完写入要按 owner 切回对应上下文 (``with tenant.user_scope(owner)``)。
+    返回的 rule 保留原 id (未加命名空间)。
+    """
+    out: list[tuple[int | None, dict]] = [
+        (None, dict(r)) for r in load_shared(data_dir)
+    ]
+    for uid, _d in user_rule_dirs(data_dir):
+        with tenant.user_scope(uid):
+            for r in load_all(data_dir):
+                out.append((uid, dict(r)))
+    return out
+
+
+def assign_owners(events: list[dict]) -> list[dict]:
+    """事件出引擎: 剥掉 id 命名空间, 并把 owner 写进 ``owner_id``。
+
+    共享规则的事件 owner 为 None (历史行为: 全员可见)。
+    """
+    out: list[dict] = []
+    for ev in events:
+        owner, plain = unscope_id(ev.get("rule_id") or "")
+        if owner is None:
+            out.append(ev)
+        else:
+            out.append({**ev, "rule_id": plain, "owner_id": owner})
+    return out
+
+
+def group_by_owner(events: list[dict]) -> dict[int | None, list[dict]]:
+    """把 (已 assign_owners 的) 事件按 owner_id 分组, 供告警按账号落盘。"""
+    groups: dict[int | None, list[dict]] = {}
+    for ev in events:
+        groups.setdefault(ev.get("owner_id"), []).append(ev)
+    return groups
 
 
 # ── 校验 ────────────────────────────────────────────────
@@ -381,7 +480,7 @@ def normalize(rule: dict) -> dict:
 
 # normalize 定义之后才能作为读取归一器引用 (P1b 统一契约 Store)
 _RULE_STORE = JsonDefinitionStore(
-    "user_data/monitor_rules", label="monitor rule", normalize=normalize
+    "monitor_rules", label="monitor rule", normalize=normalize
 )
 
 

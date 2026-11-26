@@ -36,7 +36,7 @@
 | # | 数据 | 前台入口 | 当前落盘 | 共享后果 | 优先级 |
 | --- | --- | --- | --- | --- | --- |
 | 1 | 监控规则（价格/信号/异动/日期/策略） | `/monitor`，自选/个股/策略页的规则编辑器 | `user_data/monitor_rules/*.json` | 规则互相可见、互相触发；A 删规则等于删 B 的 | P0 |
-| 2 | 告警触发记录 | `/monitor`、`/dev` | `user_data/alerts.jsonl` | 全站一个文件；`DELETE /api/alerts` 清空所有账号记录；Dev 页能造演示数据污染所有人 | P0（**读放开、清空/演示已限权，按 owner 切待规则先行**，见 §1.3） |
+| 2 | 告警触发记录 | `/monitor`、`/dev` | `user_data/users/<uid>/alerts.jsonl` | ~~全站一个文件~~ → **已按账号分文件**（阶段 1a，2026-11-26）；清空只删自己，旧全局文件仅管理员可见 | ✅ 已完成（规则先行） |
 | 3 | 持仓批次（止盈止损/到期提醒） | `/lots` | `user_data/lots/lot_*.json` | 成本价、数量、买入日期全部互见；还会派生全局监控规则 | P0 |
 | 4 | 策略池 + 策略库分组/归档 | `/screener` | `user_data/strategy_pool.json` | A 的池决定 B 扫什么；归档状态互相覆盖 | P0 |
 | 5 | 策略调参覆盖 | 策略/回测/挖掘 | `user_data/strategy_overrides/{sid}.json` | 改一次参数，所有人的回测与页面缓存一起变 | P0 |
@@ -161,13 +161,40 @@
 | 端点 | 处理 | 理由 |
 | --- | --- | --- |
 | `GET /api/alerts` | 保持开放 | 告警 toast 全局挂载，受限账号也要能收到提示 |
-| `DELETE /api/alerts`（清空全部） | `admin.data_manage` | 单文件没有 owner，普通账号清空等于删掉所有人的记录 |
-| `POST /api/alerts/seed`（造演示数据） | `page.dev` | 演示数据会落盘并 SSE 推给所有在线客户端 |
-| `DELETE /api/alerts/{ts}`（单条） | 暂保持开放 | 单条删除伤害有限；真正的边界要等 owner 落地才能按归属判定 |
+| `DELETE /api/alerts`（清空全部） | 当时限 `admin.data_manage` | 单文件没有 owner，普通账号清空等于删掉所有人的记录；**阶段 1a 落地后已放开**：只清自己账号的文件 |
+| `POST /api/alerts/seed`（造演示数据） | `page.dev` | 演示数据会落盘并 SSE 推给所有在线客户端；阶段 1a 后只写自己账号 |
+| `DELETE /api/alerts/{ts}`（单条） | 暂保持开放 | 阶段 1a 后按当前账号的文件范围删除 |
 
 前端同步：`/monitor` 的「清空」与 `/dev` 的「清空全部」按 `admin.data_manage` 显示，无权限时不渲染（避免点了才 403）。
 
 验证：`tests/test_alerts_api.py` 5 条（含「403 后记录仍在」「受限账号仍可读」）；`tests/test_tenant.py` 新增 3 条 AI 报告隔离回归。
+
+### 阶段 1a：监控规则 + 告警按账号（已完成 2026-11-26）
+
+阶段 1 的第一块，也是「告警按用户」的前置：规则不按用户存，后台引擎就填不出 owner，
+只给 `alerts.jsonl` 加字段会让所有后台告警 owner 为空、普通账号一条都收不到。
+
+| 位置 | 改动 |
+| --- | --- |
+| `tenant.py` | 新增 `user_scope(uid)` 上下文管理器（`token.reset` 复位，嵌套安全） |
+| `monitor_rules.py` | `_RULE_STORE` 改为相对私有根的 `monitor_rules`；`load_all/load_one/save_one/delete_one` 全走 `tenant.priv_base()` |
+| 同上 | 新增 `load_owned`（共享旧规则 + 各账号规则聚合）、`iter_owned`、`scoped_id/unscope_id`、`assign_owners`、`group_by_owner` |
+| 引擎装载 | 5 处装载入口（启动 / 规则 CRUD / 策略删除 / 设置 / 配置恢复）统一 `load_owned`；规则进引擎时 id 变 `u<uid>::<id>`，同名 id 不再互相覆盖 |
+| `quote_service` | 事件出引擎即 `assign_owners` 剥前缀 + 写 `owner_id`；`alert_store.append_owned` 按 owner 分文件；SSE 载荷带 `owner_id`；webhook 反查规则按 owner 还原引擎键 |
+| `alert_store` | `<私有根>/alerts.jsonl`；`append/append_many/clear/count/delete_one/list_recent` 加 `owner`（默认 `CURRENT_OWNER` 跟随请求账号） |
+| `api/alerts.py` | 读/清空只作用于自己账号；旧全局文件只对管理员额外可见（全局密码模式下不合并，避免读两遍） |
+| 前端 | `StrategyAlertEvent` 加 `owner_id`；`useQuoteStream` 只弹「自己账号 + owner 为空」的告警 |
+
+**旧数据口径**：生产 `user_data/monitor_rules` 为空（2026-11-26 核对），不做迁移；若老部署还有规则，
+按「共享规则」参与评估（`owner=None`、id 不加前缀），不猜归属。
+`alerts.jsonl` 31 条历史留在全局文件，普通账号看不到，管理员排障可读。
+
+验证：`tests/test_monitor_rules_tenant.py` 7 条（双账号同名规则进引擎不互相覆盖、事件剥前缀、按 owner 落盘等）；
+`tests/test_alerts_api.py` 重写为 7 条（账号间读隔离、清空只影响自己、管理员可见共享历史）；
+后端全量 **4916 passed**，前端 **119 文件 / 816 用例** 全绿。
+
+遗留（未做，已记录）：策略监控偏好 `strategy_monitor_ids` 仍是全局；`paper_watch` 的「已覆盖」判定跨账号；
+系统通知/webhook 通道是全局配置，A 的规则触发会走全局通道。
 
 ### 阶段 1：私有资产迁移（P0 清单）
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from app.services import tenant
 from app.strategy import monitor_rules
 from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_signals
 
@@ -53,7 +54,7 @@ def _sync_engine(request: Request) -> None:
         repo = request.app.state.repo
         rules = [
             _reconcile_index_asset_type(r, repo)
-            for r in monitor_rules.load_all(_data_dir(request))
+            for r in monitor_rules.load_owned(_data_dir(request))
         ]
         engine.set_rules(rules)
     # set_rules 全量覆盖会清掉模拟盘合成规则 → 每次必须重注入;
@@ -661,6 +662,11 @@ def trigger_ladder(request: Request):
     for rule in engine.rules.values():
         if rule.get("type") != "ladder" or not rule.get("enabled", True):
             continue
+        # 引擎里是全体账号的规则 (id 带 u<uid>:: 命名空间); 预览只针对本账号的规则,
+        # 否则会给别人凭空造告警。共享旧规则 (owner=None) 不参与个人预览。
+        if rule.get("_owner") != tenant.current_user_id():
+            continue
+        _owner, plain_id = monitor_rules.unscope_id(rule["id"])
         sym = rule.get("symbols", [""])[0] if rule.get("symbols") else ""
         metric = rule.get("metric", "sealed_vol")
         thr = rule.get("threshold", 0)
@@ -685,7 +691,7 @@ def trigger_ladder(request: Request):
 
         rule_events.append({
             "ts": int(now * 1000),
-            "rule_id": rule["id"],
+            "rule_id": plain_id,
             "rule_name": rule.get("name", ""),
             "source": "ladder",
             "type": warn_label,
@@ -705,9 +711,13 @@ def trigger_ladder(request: Request):
     if not rule_events:
         raise HTTPException(status_code=400, detail="当前无 ladder 规则满足触发条件 (封单均 > 阈值)")
 
-    # 1. 落盘到 alerts.jsonl
+    # 1. 落盘到 alerts.jsonl (本账号)
+    uid = tenant.current_user_id()
+    for ev in rule_events:
+        if uid is not None:
+            ev["owner_id"] = uid
     try:
-        alert_store.append_many(repo.store.data_dir, rule_events)
+        alert_store.append_many(repo.store.data_dir, rule_events, uid)
     except Exception:  # noqa: BLE001
         pass  # 落盘失败不阻断推送
 
@@ -719,6 +729,7 @@ def trigger_ladder(request: Request):
             "message": ev["message"], "price": ev["price"], "change_pct": ev["change_pct"],
             "signals": ev["signals"], "severity": ev["severity"],
             "conditions": ev["conditions"], "logic": ev["logic"],
+            "owner_id": ev.get("owner_id"),
         } for ev in rule_events]
         try:
             quote_svc.push_alerts(sse_alerts)

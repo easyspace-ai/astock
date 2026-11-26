@@ -2763,6 +2763,8 @@ export interface StrategyAlertEvent {
   price?: number | null
   change_pct?: number | null
   signals?: string[]
+  /** 归属账号 (监控规则按账号存); null/缺省=旧全局共享规则 */
+  owner_id?: number | null
   /** ext 富化字段 (行业/概念等), 键为 "{configId}__{fieldName}" */
   [key: string]: unknown
 }

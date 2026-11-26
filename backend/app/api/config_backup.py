@@ -102,7 +102,7 @@ def _reload_states(request: Request, hints: dict) -> None:
     if hints.get("monitor_rules"):
         monitor_engine = getattr(request.app.state, "monitor_engine", None)
         if monitor_engine is not None:
-            rules = monitor_rules.load_all(request.app.state.repo.store.data_dir)
+            rules = monitor_rules.load_owned(request.app.state.repo.store.data_dir)
             monitor_engine.set_rules(rules)
     if hints.get("data_sources"):
         custom_loader.load_all()

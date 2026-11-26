@@ -8,19 +8,30 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.permissions import require_page_access, require_permission
-from app.services import alert_store, rbac
+from app.services import alert_store, rbac, tenant
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
 # 读接口保持开放: 告警 toast 全局挂载, 受限账号也要能收到自己的提示。
-# 但「清空全部」「造演示数据」是会影响所有账号的写操作, 必须限权:
-# 单文件存储下没有 owner, 一个普通账号清空就等于删掉所有人的记录。
-_REQUIRE_ADMIN = Depends(require_permission(rbac.ADMIN_DATA_MANAGE))
+# 存储已按账号分文件 (2026-11-26), 所以「读自己的」天然互不可见;
+# 旧全局 alerts.jsonl 视为共享历史, 只给管理员读/清。
+# 「造演示数据」会往自己账号写记录 + 广播 SSE, 仍是开发能力, 需要 dev 页权限。
 _REQUIRE_DEV = Depends(require_page_access(rbac.PAGE_DEV))
 
 
 def _data_dir(request: Request) -> Path:
     return request.app.state.repo.store.data_dir
+
+
+def _is_admin(request: Request) -> bool:
+    """账号体系下的管理员。全局密码模式下 uid 为空 — 此时「私有文件」就是全局文件,
+    不存在额外合并共享历史的必要 (合并会把同一批记录读两遍)。
+    """
+    if tenant.current_user_id() is None:
+        return False
+    from app.api.permissions import has_permission
+
+    return has_permission(request, rbac.ADMIN_DATA_MANAGE)
 
 
 @router.get("")
@@ -42,6 +53,16 @@ def list_alerts(
     events = alert_store.list_recent(
         _data_dir(request), days=days, limit=limit, source=source, type=type,
     )
+    total = alert_store.count(_data_dir(request))
+    if _is_admin(request):
+        # 管理员额外看到账号系统之前的全局共享历史 (只增不减, 不影响普通账号)。
+        legacy = alert_store.list_recent(
+            _data_dir(request), days=days, limit=limit, source=source, type=type,
+            owner=None,
+        )
+        if legacy:
+            events = sorted(events + legacy, key=lambda x: x.get("ts", 0), reverse=True)[:limit]
+        total += alert_store.count(_data_dir(request), owner=None)
     if ext_columns and events:
         try:
             from app.api.screener import _load_ext_value_maps, _rows_with_ext
@@ -51,14 +72,18 @@ def list_alerts(
                 events = _rows_with_ext(events, value_maps)
         except Exception:  # noqa: BLE001
             pass
-    total = alert_store.count(_data_dir(request))
     return {"alerts": events, "total": total}
 
 
-@router.delete("", dependencies=[_REQUIRE_ADMIN])
+@router.delete("")
 def clear_alerts(request: Request):
-    """清空全部触发记录 (仅数据管理权限; 单文件存储没有 owner, 清空等于删所有人)。"""
+    """清空本账号的触发记录; 管理员额外清掉全局共享历史。
+
+    每个账号只清自己的文件 — 别人的告警不受影响, 因此不需要管理权限。
+    """
     n = alert_store.clear(_data_dir(request))
+    if _is_admin(request):
+        n += alert_store.clear(_data_dir(request), owner=None)
     return {"ok": True, "cleared": n}
 
 
@@ -111,6 +136,7 @@ def seed_demo_alerts(request: Request, count: int = 12, recent: bool = True):
     """
     count = max(1, min(50, count))
     now_ms = int(time.time() * 1000)
+    uid = tenant.current_user_id()
     events = []
     for i in range(count):
         source, message, signals, severity = _DEMO_TEMPLATES[i % len(_DEMO_TEMPLATES)]
@@ -140,8 +166,9 @@ def seed_demo_alerts(request: Request, count: int = 12, recent: bool = True):
             "change_pct": round(random.uniform(-0.06, 0.098), 4) if not (source == "strategy" and "只：" in message) else None,
             "signals": signals,
             "severity": severity,
+            **({"owner_id": uid} if uid is not None else {}),
         })
-    alert_store.append_many(_data_dir(request), events)
+    alert_store.append_many(_data_dir(request), events, tenant.current_user_id())
 
     # 同步推入 SSE 队列, 让所有连着 SSE 的客户端实时收到 (不依赖轮询)
     qs = getattr(request.app.state, "quote_service", None)
@@ -158,6 +185,7 @@ def seed_demo_alerts(request: Request, count: int = 12, recent: bool = True):
             "change_pct": ev["change_pct"],
             "signals": ev["signals"],
             "severity": ev.get("severity", "info"),
+            **({"owner_id": uid} if uid is not None else {}),
         } for ev in events]
         qs.push_alerts(sse_alerts)
 

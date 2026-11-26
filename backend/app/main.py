@@ -535,7 +535,7 @@ async def _application_lifespan(app: FastAPI):
         logger.warning("strategy monitor migration failed: %s", e)
 
     try:
-        rules = mr_store.load_all(store.data_dir)
+        rules = mr_store.load_owned(store.data_dir)
         monitor_engine.set_rules(rules)
         logger.info("monitor engine loaded: %d rules", monitor_engine.rule_count)
     except Exception as e:  # noqa: BLE001

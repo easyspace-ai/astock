@@ -1,9 +1,16 @@
 """告警触发记录存储 — JSONL 追加写 + 滚动清理。
 
 职责:
-  - 把每次触发的 AlertEvent 追加写入 data/user_data/alerts.jsonl
+  - 把每次触发的 AlertEvent 追加写入 <私有根>/alerts.jsonl (私有根见
+    tenant.priv_base: 租户 = user_data/users/<uid>, 全局 = user_data)
   - 提供查询 (按来源/类型过滤、时间倒序、限量)
   - 滚动清理: 保留近 N 天 + 上限 M 条 (取交集)
+
+按账号分文件 (2026-11-26):
+  - 写入方由调用方显式传 owner (后台引擎从事件里的 owner_id 分组得到),
+    不依赖请求上下文 — 行情评估线程没有租户上下文;
+  - 读取方默认跟随当前请求账号, 绝不把别人的告警读出来;
+  - owner=None 的旧全局文件保留为「共享历史」, 只有管理员能读/清。
 
 设计:
   - JSONL 每行一个 JSON 对象,便于增量追加和流式读取
@@ -17,6 +24,8 @@ import logging
 import threading
 from pathlib import Path
 
+from app.services import tenant
+
 logger = logging.getLogger(__name__)
 
 # 保留策略
@@ -29,22 +38,37 @@ _lock = threading.Lock()
 _write_count = 0
 
 
-def _path(data_dir: Path) -> Path:
-    """告警记录: <user_data>/alerts.jsonl。
+class _CurrentOwner:
+    """哨兵: 「跟随当前请求账号」。显式 None 表示全局旧文件。"""
 
-    告警由后台行情引擎写入(无请求账号上下文), 若按账号分目录会出现
-    "写全局、读用户目录"导致页面看不到触发记录, 故保持全局单文件。
-    """
-    p = data_dir / "user_data" / "alerts.jsonl"
+    def __repr__(self) -> str:  # pragma: no cover - 仅调试可读性
+        return "CURRENT_OWNER"
+
+
+CURRENT_OWNER = _CurrentOwner()
+
+
+def _resolve_owner(owner) -> int | None:
+    if isinstance(owner, _CurrentOwner):
+        return tenant.current_user_id()
+    return owner
+
+
+def _path(data_dir: Path, owner: int | None = None) -> Path:
+    """告警记录路径: 有 owner → 账号目录; 无 owner → 全局旧文件。"""
+    if owner is None:
+        p = data_dir / "user_data" / "alerts.jsonl"
+    else:
+        p = data_dir / "user_data" / "users" / str(owner) / "alerts.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
 
-def append(data_dir: Path, event: dict) -> None:
+def append(data_dir: Path, event: dict, owner: int | None = None) -> None:
     """追加一条触发记录。event 应含 ts(毫秒)、rule_id、source 等字段。"""
     line = json.dumps(event, ensure_ascii=False)
     with _lock:
-        p = _path(data_dir)
+        p = _path(data_dir, owner)
         with p.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
         global _write_count
@@ -55,12 +79,12 @@ def append(data_dir: Path, event: dict) -> None:
     _publish_events([event])
 
 
-def append_many(data_dir: Path, events: list[dict]) -> None:
-    """批量追加。"""
+def append_many(data_dir: Path, events: list[dict], owner: int | None = None) -> None:
+    """批量追加 (同一文件)。混合 owner 的批次用 ``append_owned``。"""
     if not events:
         return
     with _lock:
-        p = _path(data_dir)
+        p = _path(data_dir, owner)
         with p.open("a", encoding="utf-8") as f:
             for ev in events:
                 f.write(json.dumps(ev, ensure_ascii=False) + "\n")
@@ -70,6 +94,24 @@ def append_many(data_dir: Path, events: list[dict]) -> None:
             _write_count = 0
             _prune_locked(p)
     _publish_events(events)
+
+
+def append_owned(data_dir: Path, events: list[dict]) -> dict[int | None, int]:
+    """按事件自带 ``owner_id`` 分流落盘 (后台引擎一批可能混多个账号)。
+
+    无 ``owner_id`` 的事件 (共享规则/模拟盘/系统通知) 落全局旧文件, 行为不变。
+    返回 {owner: 写入条数} 便于日志与测试断言。
+    """
+    counts: dict[int | None, int] = {}
+    if not events:
+        return counts
+    groups: dict[int | None, list[dict]] = {}
+    for ev in events:
+        groups.setdefault(ev.get("owner_id"), []).append(ev)
+    for owner, group in groups.items():
+        append_many(data_dir, group, owner)
+        counts[owner] = len(group)
+    return counts
 
 
 def _publish_events(events: list[dict]) -> None:
@@ -89,15 +131,19 @@ def list_recent(
     limit: int = MAX_RECORDS,
     source: str | None = None,
     type: str | None = None,
+    owner=CURRENT_OWNER,
 ) -> list[dict]:
     """读取近 N 天记录,按时间倒序,支持按 source/type 过滤。
+
+    owner 默认 `CURRENT_OWNER`: 跟随当前请求账号 (无租户 → 全局文件)。
+    显式传 None 读全局共享历史 (管理员排障用)。
 
     持锁读: prune/delete/clear 会整文件重写, 无锁读可能读到截断内容。
     """
     import time
     cutoff = (time.time() - days * 86400) * 1000  # 毫秒
     out: list[dict] = []
-    p = _path(data_dir)
+    p = _path(data_dir, _resolve_owner(owner))
     if not p.exists():
         return []
     try:
@@ -125,10 +171,10 @@ def list_recent(
     return out[:limit]
 
 
-def clear(data_dir: Path) -> int:
-    """清空全部记录,返回清除的条数。"""
+def clear(data_dir: Path, owner=CURRENT_OWNER) -> int:
+    """清空记录,返回清除的条数 (默认只清当前账号的文件)。"""
     with _lock:
-        p = _path(data_dir)
+        p = _path(data_dir, _resolve_owner(owner))
         if not p.exists():
             return 0
         count = 0
@@ -141,14 +187,14 @@ def clear(data_dir: Path) -> int:
         return count
 
 
-def delete_one(data_dir: Path, ts: int) -> bool:
+def delete_one(data_dir: Path, ts: int, owner=CURRENT_OWNER) -> bool:
     """删除指定 ts 的单条记录,返回是否删除成功。
 
     JSONL 无主键, 用 ts(毫秒时间戳) 作为标识。
     若存在多条同 ts, 只删第一条。
     """
     with _lock:
-        p = _path(data_dir)
+        p = _path(data_dir, _resolve_owner(owner))
         if not p.exists():
             return False
         kept: list[dict] = []
@@ -182,9 +228,9 @@ def delete_one(data_dir: Path, ts: int) -> bool:
         return True
 
 
-def count(data_dir: Path) -> int:
+def count(data_dir: Path, owner=CURRENT_OWNER) -> int:
     """返回当前记录总数。持锁读, 防与整文件重写并发。"""
-    p = _path(data_dir)
+    p = _path(data_dir, _resolve_owner(owner))
     if not p.exists():
         return 0
     try:

@@ -69,6 +69,7 @@ export function useQuoteStream(
   enabled: boolean,
   sseRefreshPages: Record<string, boolean> | undefined,
   onAlert?: (alerts: StrategyAlertEvent[]) => void,
+  ownerId?: number | null,
 ) {
   useDataVersions()
   const qc = useQueryClient()
@@ -80,7 +81,18 @@ export function useQuoteStream(
   const enrichedThrottlerRef = useRef(createEnrichedThrottler())
   const strategyThrottlerRef = useRef(createEnrichedThrottler(6000))
 
-  const handleAlerts = useCallback((alerts: StrategyAlertEvent[]) => {
+  const ownerRef = useRef<number | null | undefined>(ownerId)
+  ownerRef.current = ownerId
+
+  const handleAlerts = useCallback((rawAlerts: StrategyAlertEvent[]) => {
+    // 告警按账号隔离: 后端广播里带 owner_id(None=旧共享规则)。
+    // 只弹自己账号的告警 — 别人的规则触发不该出现在我的屏幕上。
+    const alerts = rawAlerts.filter(a => {
+      const owner = a.owner_id
+      if (owner == null) return true            // 共享规则/系统事件: 全员可见 (历史行为)
+      return owner === ownerRef.current         // 账号未加载时一律丢弃, 宁可少弹不漏别人
+    })
+    if (alerts.length === 0) return
     // depth 系统接管通知: 单独处理, 不走 strategy 回调
     const depthAlerts = alerts.filter(a => a.source === 'depth')
     const strategyAlerts = alerts.filter(a => a.source !== 'depth')

@@ -22,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.backtest.minute_trigger import MINUTE_EXIT_TRIGGER_SIGNALS
 from app.services import strategy_pool
+from app.services import tenant
 from app.services.ndjson_heartbeat import with_heartbeat
 from app.strategy import config as strategy_config
 from app.strategy.ai_generator import (
@@ -130,7 +131,7 @@ def _cleanup_deleted_strategy(request: Request, strategy_id: str) -> list[str]:
 
     try:
         rules_changed = False
-        for rule in monitor_rules.load_all(data_dir):
+        for owner, rule in monitor_rules.iter_owned(data_dir):
             if (
                 rule.get("type") == "strategy"
                 and rule.get("strategy_id") == strategy_id
@@ -138,12 +139,13 @@ def _cleanup_deleted_strategy(request: Request, strategy_id: str) -> list[str]:
             ):
                 rule = dict(rule)
                 rule["enabled"] = False
-                monitor_rules.save_one(data_dir, rule)
+                with tenant.user_scope(owner):
+                    monitor_rules.save_one(data_dir, rule)
                 rules_changed = True
 
         monitor_engine = getattr(request.app.state, "monitor_engine", None)
         if rules_changed and monitor_engine is not None:
-            monitor_engine.set_rules(monitor_rules.load_all(data_dir))
+            monitor_engine.set_rules(monitor_rules.load_owned(data_dir))
     except Exception as e:
         warnings.append(f"关联监控清理失败: {e}")
 

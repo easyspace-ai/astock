@@ -1451,8 +1451,8 @@ def update_realtime_monitor_config(req: RealtimeMonitorConfigIn, request: Reques
                 else:
                     # 关闭策略监控: 停用所有策略规则
                     mr_store.migrate_strategy_monitors(data_dir, [], {})
-                # reload 规则到引擎
-                monitor_engine.set_rules(mr_store.load_all(data_dir))
+                # reload 规则到引擎 (跨账号聚合: 本次改动只落在当前账号, 其余账号规则不变)
+                monitor_engine.set_rules(mr_store.load_owned(data_dir))
             except Exception:
                 pass
 
