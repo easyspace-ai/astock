@@ -2,17 +2,33 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { api, type Preferences } from '@/lib/api'
+import { api, type MenuNode, type Preferences } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { useQuery } from '@tanstack/react-query'
 import { SettingsMenuSettingsPanel } from './MenuSettings'
-import type { NavLayout } from '@/lib/navLayout'
 
+// 后台菜单树是页面设置的唯一来源; 编辑器只渲染已注册页面。
 vi.mock('@/extensions/registry', () => ({ getFrontendExtensionNavigation: () => [] }))
-vi.mock('@/lib/useSharedQueries', () => ({ usePreferences: () => useQuery({ queryKey: QK.preferences, queryFn: api.preferences }) }))
-vi.mock('@/components/Toast', () => ({ toast: vi.fn() }))
+vi.mock('@/lib/useSharedQueries', () => ({
+  usePreferences: () => useQuery({ queryKey: QK.preferences, queryFn: api.preferences }),
+}))
+vi.mock('@/lib/useAccount', () => ({
+  usePermissions: () => ({
+    loading: false, user: null, codes: [], can: () => true, canAny: () => true,
+    isSuperAdmin: false, canAdmin: true,
+  }),
+}))
+
+const PREFS = { nav_order: [], nav_hidden: [], nav_layout: null } as unknown as Preferences
+
+const PAGE_MENUS: MenuNode[] = [
+  { key: 'page.dashboard', label: '看板', group: 'page', kind: 'permission', description: '', route: '/', order: 5 },
+  { key: 'page.watchlist', label: '自选', group: 'page', kind: 'permission', description: '', route: '/watchlist', order: 20 },
+  { key: 'page.screener', label: '策略', group: 'page', kind: 'permission', description: '', route: '/screener', order: 30 },
+  { key: 'page.indices', label: '指数', group: 'page', kind: 'permission', description: '', route: '/indices', order: 100 },
+]
+
 let root: Root
 let host: HTMLDivElement
 let client: QueryClient
@@ -22,17 +38,21 @@ beforeEach(() => {
   host = document.createElement('div'); document.body.append(host)
   root = createRoot(host)
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
-  const prefs = { nav_order: ['/', '/watchlist', '/screener'], nav_hidden: [], nav_layout: null } as unknown as Preferences
-  client.setQueryData(QK.preferences, prefs)
-  vi.spyOn(api, 'preferences').mockResolvedValue(prefs)
+  vi.spyOn(api, 'preferences').mockResolvedValue(PREFS)
+  vi.spyOn(api, 'navigationTree').mockResolvedValue({ menus: PAGE_MENUS })
   vi.spyOn(api, 'analysisMenus').mockResolvedValue({ items: [] })
-  vi.spyOn(api, 'saveNavLayout').mockImplementation(async (nav_layout, nav_hidden) => ({ nav_layout, nav_hidden, nav_order: [] }))
+  vi.spyOn(api, 'saveNavigationLayout').mockResolvedValue({ menus: PAGE_MENUS })
+  vi.spyOn(api, 'saveNavHidden').mockImplementation(async nav_hidden => ({ nav_hidden }))
 })
 afterEach(async () => {
   await act(async () => root.unmount())
   client.clear(); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals()
 })
-async function mount() {
+async function mount(menus: MenuNode[] = PAGE_MENUS) {
+  // 预置缓存: 避免测试命中 busy(未加载) 分支, 挂载即得到可编辑的布局。
+  client.setQueryData(QK.preferences, PREFS)
+  client.setQueryData(QK.navigationTree, { menus })
+  client.setQueryData(QK.analysisMenus, { items: [] })
   await act(async () => root.render(<MemoryRouter><QueryClientProvider client={client}>
     <SettingsMenuSettingsPanel />
   </QueryClientProvider></MemoryRouter>))
@@ -43,10 +63,11 @@ async function click(text: string) {
   await act(async () => button.click())
 }
 async function fill(label: string, text: string) {
-  const input = host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!
+  const input = host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)
+  expect(input).toBeInstanceOf(HTMLInputElement)
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, text)
-    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input!.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
 async function createGroup() {
@@ -64,13 +85,16 @@ it('pins home and atomically saves a new group, child move, and visibility', asy
   expect(host.querySelector('select[aria-label="移动看板到"]')).toBeNull()
   const group = await createGroup(); await moveWatchlist(group)
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="隐藏指数"]')!.click())
-  await click('保存布局')
-  expect(api.saveNavLayout).toHaveBeenCalledOnce()
-  const saved = vi.mocked(api.saveNavLayout).mock.calls[0][0]!
+  await click('保存菜单设置')
+  expect(api.saveNavigationLayout).toHaveBeenCalledOnce()
+  const saved = vi.mocked(api.saveNavigationLayout).mock.calls[0][0]!
   expect(saved.items[0]).toEqual({ type: 'page', id: '/' })
-  expect(saved.items.find(x => x.id === group)).toMatchObject({ label: '交易工作台', children: [{ type: 'page', id: '/watchlist' }] })
+  expect(saved.items.find(x => x.id === group)).toMatchObject({
+    label: '交易工作台', children: [{ type: 'page', id: '/watchlist' }],
+  })
   expect(saved.items.filter(x => x.id === '/watchlist')).toHaveLength(0)
-  expect(vi.mocked(api.saveNavLayout).mock.calls[0][1]).toEqual(['/indices'])
+  // 隐藏是个人偏好, 单独走 nav-hidden, 不混进全局菜单结构。
+  expect(vi.mocked(api.saveNavHidden).mock.calls[0][0]).toEqual(['/indices'])
 })
 
 it('renders a drop target right after the home entry for placing the second menu', async () => {
@@ -90,30 +114,34 @@ it('creates the category directly below home and focuses it instead of appending
 it('dissolves a group without deleting child pages', async () => {
   await mount(); const group = await createGroup(); await moveWatchlist(group)
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="解散交易工作台"]')!.click())
-  await click('保存布局')
-  const saved = vi.mocked(api.saveNavLayout).mock.calls[0][0]!
+  await click('保存菜单设置')
+  const saved = vi.mocked(api.saveNavigationLayout).mock.calls[0][0]!
   expect(saved.items.some(x => x.type === 'group')).toBe(false)
   expect(saved.items.some(x => x.id === '/watchlist')).toBe(true)
 })
 
 it('retains the draft after a failed save and permits retry', async () => {
-  vi.mocked(api.saveNavLayout).mockRejectedValueOnce(new Error('保存失败，请重试'))
+  vi.mocked(api.saveNavigationLayout).mockRejectedValueOnce(new Error('保存失败，请重试'))
   await mount(); const group = await createGroup(); await moveWatchlist(group)
-  await click('保存布局')
+  await click('保存菜单设置')
   expect(host.querySelector('[role=alert]')?.textContent).toContain('保存失败')
   expect(host.querySelector<HTMLInputElement>('input[aria-label="分类名称：交易工作台"]')?.value).toBe('交易工作台')
-  await click('保存布局')
-  expect(api.saveNavLayout).toHaveBeenCalledTimes(2)
+  await click('保存菜单设置')
+  expect(api.saveNavigationLayout).toHaveBeenCalledTimes(2)
 })
 
-it('preserves unavailable plugin references when saving unrelated changes', async () => {
-  const layout: NavLayout = { v: 1, items: [{ type: 'page', id: '/' },
-    { type: 'group', id: 'group:offline', label: '外部研究', children: [{ type: 'page', id: '/offline' }] }] }
-  client.setQueryData(QK.preferences, { nav_layout: layout, nav_hidden: [], nav_order: [] })
-  await mount()
-  expect(host.textContent).toContain('页面暂不可用，归属已保留')
-  await createGroup(); await click('保存布局')
-  expect(vi.mocked(api.saveNavLayout).mock.calls[0][0]?.items).toContainEqual(layout.items[1])
+it('does not render or submit routes missing from the frontend registry', async () => {
+  // 扩展页前端产物缺失时, 后端树里仍有该节点, 但前端无法渲染它。
+  // 编辑器不画它、也不提交它 —— 后端 save_layout 会保留未提交页面的旧归属。
+  const menus: MenuNode[] = [...PAGE_MENUS,
+    { key: 'menu.custom.offline', label: '外部研究', group: 'page', kind: 'group', description: '', order: 50 },
+    { key: 'page.ext.route.offline', label: '离线页', group: 'page', kind: 'permission', description: '', route: '/offline', parent: 'menu.custom.offline' },
+  ]
+  await mount(menus)
+  expect(host.querySelector('[data-nav-id="/offline"]')).toBeNull()
+  expect(host.textContent).toContain('外部研究')
+  await createGroup(); await click('保存菜单设置')
+  expect(JSON.stringify(vi.mocked(api.saveNavigationLayout).mock.calls[0][0]?.items)).not.toContain('/offline')
 })
 
 it('creates groups on HTTP installations without crypto.randomUUID', async () => {
