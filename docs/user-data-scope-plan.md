@@ -193,8 +193,12 @@
 `tests/test_alerts_api.py` 重写为 7 条（账号间读隔离、清空只影响自己、管理员可见共享历史）；
 后端全量 **4916 passed**，前端 **119 文件 / 816 用例** 全绿。
 
-遗留（未做，已记录）：策略监控偏好 `strategy_monitor_ids` 仍是全局；`paper_watch` 的「已覆盖」判定跨账号；
+遗留（未做，已记录）：`paper_watch` 的「已覆盖」判定跨账号；
 系统通知/webhook 通道是全局配置，A 的规则触发会走全局通道。
+
+> `strategy_monitor_ids` / `strategy_monitor_enabled` 经核对是**死字段**：前端自「规则即来源」改造后
+> 不再写这两个键（Screener 直接建 `type=strategy` 规则），生产 `preferences.json` 里也没有值。
+> 因此不做按账号拆分，保留其作为旧版迁移输入（`migrate_strategy_monitors`）即可。
 
 ### 阶段 1b：批次 / 模拟盘按账号（已完成 2026-11-26）
 
@@ -214,6 +218,25 @@
 验证：`tests/test_private_assets_tenant.py` 4 条（批次/账户按账号落盘、`account_refs` 跨账号+旧布局、无 scope 时结算读不到账户）；
 模拟盘 4 个既有测试文件同步改为私有根路径断言；后端全量 **4921 passed**。
 
+### 阶段 1c：策略池 / 策略库元数据按账号（已完成 2026-11-26）
+
+| 位置 | 改动 |
+| --- | --- |
+| `services/strategy_pool.py` | 新增 `_state_path(data_dir)`：`tenant.priv_base(...)/strategy_pool.json`，租户落 `user_data/users/<uid>/`，全局模式仍读旧文件；`_path()` 走它 |
+| 同上 | `library_metadata()` 原来硬拼 `data_dir/user_data/strategy_pool.json`，改为 `_state_path(ensure_dir=False)`，否则策略列表的分组/归档会显示别人的 |
+| 同上 | 降级影子 `ui_prefs.strategy_pool` 只在全局模式写：该键是全站共享文件，多账号各写各的会互相覆盖 |
+| `services/config_backup.py` | `_ACCOUNT_PRIVATE_FILES` 新增 `strategy_pool.json` 类别；租户导出不再收集全局旧文件；旧备份条目（全局路径）在 `_classify` 里落回当前账号目录 |
+
+**语义**：「我收藏了哪些策略、怎么分组、哪些归档」是个人视图，与「策略文件本身是否存在、能否被引用」无关 ——
+策略池是纯 UI 状态（`api/strategy_pool.py` 明确「写操作不做策略引擎存在性校验」），所以不需要跨账号聚合装载。
+
+**旧数据口径**：生产 `user_data/strategy_pool.json` 只有 2 个 demo ID（文件本就属于空池）、
+`strategy_overrides` 为空（2026-11-26 核对）。账号首次访问时按迁移链从 `ui_prefs.strategy_pool` 种子一次；
+老部署若全局池有真实内容，该值同样通过这条迁移链进入各自账号，不猜归属。
+
+验证：`tests/test_strategy_pool_tenant.py` 5 条（双账号池互不可见、库元数据按账号、租户不写影子、导出只带账号文件、旧备份条目落回账号）；
+后端全量 **4926 passed**。
+
 ### 阶段 1：私有资产迁移（P0 清单）
 
 按 §1.2 的 1–13 项逐个改入口，每项都是「一处路径 + 一处缓存 key + 一处前端刷新」：
@@ -223,7 +246,8 @@
 | 监控规则 | `JsonDefinitionStore` 支持相对私有根；引擎按用户加载/热更新；规则 id 需带 owner 或全局唯一 |
 | 告警 | 写入侧带 owner；查询按 owner；演示数据只进当前账号 |
 | 持仓批次 | 路径 + 派生规则 owner；`lots` 页读取按租户 |
-| 策略池 / 调参 / 结果缓存 | 三者必须同源迁移，否则「池是 A 的、参数是 B 的」 |
+| 策略调参 | 路径按账号**且**后台消费者（回测 worker / guardian / mining runtime）需要 owner 上下文，否则读到空覆盖 |
+| 策略池 | 已完成（见阶段 1c）；池与调参必须同源，否则「池是 A 的、参数是 B 的」 |
 | 仓位策略 | 路径 + 代码执行隔离（同一进程执行用户代码本身是既有风险，不在本次范围但需标注） |
 | 模拟盘 | `data/paper/accounts` → `users/<uid>/paper/accounts`，账户 id 作用域降为「用户内唯一」 |
 | 界面偏好 | 从 `preferences.json` 拆出个人段，`/api/settings/preferences` 读写走租户 |

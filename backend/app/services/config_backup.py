@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
+from app.services import tenant
 from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -53,13 +54,14 @@ SENSITIVE_RULE_FIELDS = ("webhook_url",)
 _STRATEGY_SOURCES = ("custom", "ai", "composite")
 
 # 多账号私有数据文件 → 备份分类 (user_data/users/<uid>/<file>)。
-# 偏好/告警/策略池仍是全局文件, 不在此列。
+# 偏好/告警仍是全局文件, 不在此列。
 _ACCOUNT_PRIVATE_FILES = {
     "watchlist.parquet": "watchlist",
     "watchlist_groups.json": "watchlist",
     "ai_reports.json": "reports",
     "ai_stock_reports.json": "reports",
     "assistant_sessions.json": "history",
+    "strategy_pool.json": "strategy_pool",
 }
 
 # 类别注册表 — 导出枚举、导入校验、结果展示共用一份。
@@ -222,7 +224,10 @@ def _classify(rel: PurePosixPath, data_dir: Path) -> tuple[str, Path] | None:
         if name == "preferences.json":
             return "preferences", data_dir / "user_data" / "preferences.json"
         if name == "strategy_pool.json":
-            return "strategy_pool", data_dir / "user_data" / name
+            # 策略池按账号存: 旧备份条目(全局路径)在租户模式下要落回当前账号。
+            from app.services import strategy_pool
+
+            return "strategy_pool", strategy_pool._state_path(data_dir, ensure_dir=False)
         if name == "secrets.json":
             return "secrets", data_dir / "user_data" / "secrets.json"
         if name in ("watchlist.parquet", "watchlist_groups.json"):
@@ -290,10 +295,14 @@ def _collect_backup_files(data_dir: Path) -> list[Path]:
         "watchlist.parquet", "watchlist_groups.json", "preferences.json",
         "research_candidates.json", "alerts.jsonl", "assistant_sessions.json", "strategy_pool.json",
     ):
+        # 策略池已按账号存: 租户模式下只导出账号目录里的那份, 不再把全局旧文件
+        # 当成本账号数据带出去(否则导入时会把别人的池灌进来)。
+        if name == "strategy_pool.json" and tenant.is_tenant():
+            continue
         p = data_dir / "user_data" / name
         if p.is_file():
             out.append(p)
-    # 多账号私有数据 (自选/报告/会话) 按账号目录逐个收集
+    # 多账号私有数据 (自选/报告/会话/策略池) 按账号目录逐个收集
     users_dir = data_dir / "user_data" / "users"
     if users_dir.is_dir():
         for user_dir in sorted(users_dir.iterdir()):

@@ -6,7 +6,9 @@
     标记、加入时间。分组/归档属于「策略库里的这个策略」, 与它是否在池中
     无关; 「自定义/AI/叠加」是策略来源分类, 由策略自身决定, 不在此存储。
 
-存储 ``data/user_data/strategy_pool.json``:
+存储 ``<私有根>/strategy_pool.json`` —— 租户模式落 ``data/user_data/users/<uid>/``,
+  全局模式(面板密码/无账号)仍是 ``data/user_data/``(兼容旧文件):
+  「我收藏了哪些策略、怎么分组归档」是个人视图, 不与他人共享。
   {"version": 2, "groups": [{id, name}], "pool": ["id", ...],
    "meta": {"id": {"group": g|None, "archived": bool, "archived_at": str|None,
                    "added_at": str}}}
@@ -17,7 +19,8 @@
 
 迁移链: 无文件 → 从 ui_prefs.strategy_pool (v1 纯 ID 数组) 种子;
   v1 文件 (entries/archived 结构) → 池取 entries 顺序, 属性折入 meta。
-前端每次变更向旧偏好键影子写入纯 ID 数组, 保证降级回滚可用。
+全局模式下前端每次变更向旧偏好键影子写入纯 ID 数组, 保证降级回滚可用;
+租户模式不写影子 —— 那份 ui_prefs 是全站共享文件, 多账号互相覆盖只会写坏。
 """
 from __future__ import annotations
 
@@ -29,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import settings
-from app.services import preferences
+from app.services import preferences, tenant
 from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -44,10 +47,17 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _path() -> Path:
-    p = settings.data_dir / "user_data" / "strategy_pool.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
+def _state_path(data_dir: Path | None = None, *, ensure_dir: bool = True) -> Path:
+    """策略池文件路径: 私有根下的 strategy_pool.json (租户 → 账号目录)。"""
+    base = tenant.priv_base(data_dir if data_dir is not None else settings.data_dir)
+    p = base / "strategy_pool.json"
+    if ensure_dir:
+        p.parent.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _path() -> Path:
+    return _state_path()
 
 
 def _empty_state() -> dict:
@@ -208,10 +218,12 @@ def _write(state: dict) -> None:
     atomic_write_text(_path(), json.dumps(payload, ensure_ascii=False, indent=2))
     # 旧版只认识 ui_prefs.strategy_pool。服务端在同一把锁内维护影子, 避免
     # 多窗口把晚到的旧前端偏好写回, 降级时恢复出过时的池。
-    try:
-        preferences.set_ui_prefs({"strategy_pool": json.dumps(state["pool"], ensure_ascii=False)})
-    except (OSError, ValueError):
-        logger.warning("strategy pool saved, but legacy preference shadow could not be updated")
+    # 租户模式跳过: ui_prefs 无账号维度, 多账号各写各的会互相覆盖。
+    if not tenant.is_tenant():
+        try:
+            preferences.set_ui_prefs({"strategy_pool": json.dumps(state["pool"], ensure_ascii=False)})
+        except (OSError, ValueError):
+            logger.warning("strategy pool saved, but legacy preference shadow could not be updated")
 
 
 def load_snapshot() -> dict:
@@ -222,7 +234,7 @@ def load_snapshot() -> dict:
 
 def library_metadata(data_dir: Path) -> dict[str, dict]:
     """列表一次性附加库级属性; 不初始化文件、不改变引擎或旧引用的执行语义。"""
-    path = data_dir / "user_data" / "strategy_pool.json"
+    path = _state_path(data_dir, ensure_dir=False)
     with _LOCK:
         if not path.is_file():
             return {}
@@ -259,7 +271,8 @@ def restore_legacy_preferences(*, allow_overwrite: bool = False) -> None:
             if pool != state["pool"]:
                 state["pool"] = pool
                 _write(state)
-        preferences.set_ui_prefs({"strategy_pool": json.dumps(state["pool"], ensure_ascii=False)})
+        if not tenant.is_tenant():
+            preferences.set_ui_prefs({"strategy_pool": json.dumps(state["pool"], ensure_ascii=False)})
 
 
 def _ensure_meta(state: dict, strategy_id: str) -> dict:
