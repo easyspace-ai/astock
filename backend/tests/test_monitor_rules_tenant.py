@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import polars as pl
+
 from app.services import alert_store, tenant
 from app.strategy import monitor_rules as mr
 from app.strategy.monitor import MonitorRuleEngine
@@ -102,3 +104,28 @@ def test_append_owned_writes_into_each_account_file(tmp_path):
     assert alert_store.count(tmp_path, owner=1) == 1
     assert alert_store.count(tmp_path, owner=2) == 2
     assert alert_store.count(tmp_path, owner=None) == 0
+
+
+def test_engine_events_carry_namespace_then_strip_to_owner(tmp_path):
+    """端到端: 引擎里的事件带 u<uid>:: 前缀, assign_owners 剥掉后 owner 正确。
+
+    前缀假设一旦失效 (比如引擎改成回显裸 id), 这里会失败 — 那是 SSE/告警
+    归属链路的根, 必须是可执行的断言而不是阅读结论。
+    """
+    with tenant.user_scope(1):
+        mr.save_one(tmp_path, dict(RULE))
+    engine = MonitorRuleEngine()
+    engine.set_rules(mr.load_owned(tmp_path))
+
+    df = pl.DataFrame({
+        "symbol": ["600519.SH"],
+        "name": ["贵州茅台"],
+        "close": [1000.0],
+        "change_pct": [5.0],
+    })
+    raw = engine.evaluate(df, asset_type="stock")
+    assert raw and raw[0]["rule_id"] == "u1::mr_same_id"
+
+    events = mr.assign_owners(raw)
+    assert events[0]["rule_id"] == "mr_same_id"
+    assert events[0]["owner_id"] == 1
