@@ -103,7 +103,11 @@ class MiningJobManager:
                 "queued",
                 {"status": "queued", "source": source},
             )
-            self._start_thread_locked(run_id, source)
+            # 账号随任务带到线程: threading 不继承 ContextVar, 而 task_factory
+            # 与 worker 都要读当前账号的策略参数覆盖。
+            from app.services import tenant
+
+            self._start_thread_locked(run_id, source, tenant.current_user_id())
             return manifest
 
     def cancel(self, run_id: str) -> dict[str, Any]:
@@ -148,13 +152,13 @@ class MiningJobManager:
     def recover_interrupted(self) -> int:
         return self._store.recover_interrupted()
 
-    def _start_thread_locked(self, run_id: str, source: str) -> None:
+    def _start_thread_locked(self, run_id: str, source: str, owner: int | None = None) -> None:
         if run_id in self._threads:
             return
         cancel_event = threading.Event()
         thread = threading.Thread(
             target=self._run_job,
-            args=(run_id, source, cancel_event),
+            args=(run_id, source, cancel_event, owner),
             name=f"{self._kind}-{run_id}",
             daemon=True,
         )
@@ -163,6 +167,18 @@ class MiningJobManager:
         thread.start()
 
     def _run_job(
+        self,
+        run_id: str,
+        source: str,
+        cancel_event: threading.Event,
+        owner: int | None = None,
+    ) -> None:
+        from app.services import tenant
+
+        with tenant.user_scope(owner):
+            self._run_job_scoped(run_id, source, cancel_event)
+
+    def _run_job_scoped(
         self,
         run_id: str,
         source: str,

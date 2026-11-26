@@ -22,6 +22,7 @@ from typing import Any, Callable
 import polars as pl
 
 from app.market_time import cn_today
+from app.services import tenant
 from app.strategy import config as _strategy_config
 from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
 from app.strategy.custom_signals import signal_names as _custom_signal_names
@@ -658,7 +659,14 @@ class MonitorRuleEngine:
                     continue
                 overrides = {}
                 if self._data_dir:
-                    overrides = _strategy_config.load_override(self._data_dir, sid)
+                    # 账号规则带 _owner: 引擎线程没有请求上下文, 必须按规则归属
+                    # 进入账号才能读到该账号的策略参数覆盖 (共享旧规则读全局)。
+                    owner = rule.get("_owner")
+                    if owner is None:
+                        overrides = _strategy_config.load_override(self._data_dir, sid)
+                    else:
+                        with tenant.user_scope(owner):
+                            overrides = _strategy_config.load_override(self._data_dir, sid)
                 matrix_rules.append(rule)
                 overrides_map[sid] = overrides
                 params_map[sid] = dict(overrides.get("params") or {})
@@ -1236,7 +1244,12 @@ class MonitorRuleEngine:
         overrides = {}
         if self._data_dir:
             try:
-                overrides = _strategy_config.load_override(self._data_dir, sid)
+                owner = rule.get("_owner")
+                if owner is None:
+                    overrides = _strategy_config.load_override(self._data_dir, sid)
+                else:
+                    with tenant.user_scope(owner):
+                        overrides = _strategy_config.load_override(self._data_dir, sid)
             except Exception:
                 pass
 

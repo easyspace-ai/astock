@@ -2,7 +2,9 @@
 
 职责: 将每个策略的用户定制设置（基础参数、策略参数、评分、买卖信号）持久化到 JSON。
 不知道: 引擎、AI、前端、回测。
-存储: data/user_data/strategy_overrides/{strategy_id}.json
+存储: ``<私有根>/strategy_overrides/{strategy_id}.json`` —— 租户模式落
+``data/user_data/users/<uid>/``, 全局模式(面板密码/无账号)仍是
+``data/user_data/strategy_overrides``(兼容旧文件)。
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import json
 import logging
 from pathlib import Path
 
+from app.services import tenant
 from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -29,7 +32,7 @@ def _invalidate_override_cache(path: Path) -> None:
 
 
 def _overrides_dir(data_dir: Path) -> Path:
-    d = data_dir / "user_data" / "strategy_overrides"
+    d = tenant.priv_base(data_dir) / "strategy_overrides"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -40,7 +43,7 @@ def _path(data_dir: Path, strategy_id: str, *, ensure_dir: bool = True) -> Path:
     if ensure_dir:
         d = _overrides_dir(data_dir)
     else:
-        d = data_dir / "user_data" / "strategy_overrides"
+        d = tenant.priv_base(data_dir) / "strategy_overrides"
     return d / f"{strategy_id}.json"
 
 

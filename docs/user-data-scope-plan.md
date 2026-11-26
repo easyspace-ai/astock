@@ -237,6 +237,31 @@
 验证：`tests/test_strategy_pool_tenant.py` 5 条（双账号池互不可见、库元数据按账号、租户不写影子、导出只带账号文件、旧备份条目落回账号）；
 后端全量 **4926 passed**。
 
+### 阶段 1d：策略调参按账号 + 后台账号上下文（已完成 2026-11-26）
+
+| 位置 | 改动 |
+| --- | --- |
+| `strategy/config.py` | `_overrides_dir` / `_path` 走 `tenant.priv_base(data_dir)/strategy_overrides`；缓存键是文件绝对路径，**天然按账号隔离**，无需额外的缓存维度 |
+| `backtest/worker.py` | `make_worker_task(..., owner=None)` 把账号随任务序列化进子进程；`_worker_entry` 在 `tenant.user_scope(task["owner"])` 内执行 |
+| `services/mining_manager.py` | `start()` 在请求线程捕获 uid，经 `_start_thread_locked` / `_run_job` 显式带进后台线程后 `user_scope` —— `threading` 不复制 ContextVar，不能靠隐式继承 |
+| `strategy/monitor.py` | 两条 `load_override` 按规则 `_owner` 进账号上下文；共享旧规则（无 `_owner`）仍读全局 |
+| `services/resource_bundle.py` | 导出打包与本机冲突检测改走同一 `_path`，导出的是当前账号自己的调参 |
+| `services/mining_schedule.py` | 指纹计算改走 `_path`（统一入口，后台无上下文时等价全局） |
+| `services/config_backup.py` | 账号私有 `strategy_overrides/*.json` 纳入备份；租户导出不带全局旧文件；旧备份条目映射回当前账号 |
+
+**后台任务口径**（写清楚，避免以后"为什么读不到参数"）：
+
+- 手动回测 / 手动挖掘 / 手动守护：owner = 提交账号，子进程与后台线程都能读到该账号调参。
+- 定时周度挖掘、定时守护：owner = `None`，按**系统任务**处理，只读全局参数。它们不绑定某个账号，
+  硬猜归属会让"管理员改了参数影响别人定时任务"。
+- 重启后恢复的中断任务同理按系统任务（manifest 不存 owner），文档在此明示。
+
+**旧数据口径**：生产 `user_data/strategy_overrides` 为空（2026-11-26 核对），无迁移；
+老部署残留的全局调参文件仍被全局模式与系统任务读取，账号任务不读它（不猜归属）。
+
+验证：`tests/test_strategy_override_tenant.py` 5 条（双账号覆盖读写/删除隔离、worker task 带 owner、
+后台线程进入账号上下文、无上下文保持全局）；后端全量 **4931 passed**。
+
 ### 阶段 1：私有资产迁移（P0 清单）
 
 按 §1.2 的 1–13 项逐个改入口，每项都是「一处路径 + 一处缓存 key + 一处前端刷新」：
@@ -246,7 +271,7 @@
 | 监控规则 | `JsonDefinitionStore` 支持相对私有根；引擎按用户加载/热更新；规则 id 需带 owner 或全局唯一 |
 | 告警 | 写入侧带 owner；查询按 owner；演示数据只进当前账号 |
 | 持仓批次 | 路径 + 派生规则 owner；`lots` 页读取按租户 |
-| 策略调参 | 路径按账号**且**后台消费者（回测 worker / guardian / mining runtime）需要 owner 上下文，否则读到空覆盖 |
+| 策略调参 | 已完成（见阶段 1d）：路径按账号 + 任务携带 owner |
 | 策略池 | 已完成（见阶段 1c）；池与调参必须同源，否则「池是 A 的、参数是 B 的」 |
 | 仓位策略 | 路径 + 代码执行隔离（同一进程执行用户代码本身是既有风险，不在本次范围但需标注） |
 | 模拟盘 | `data/paper/accounts` → `users/<uid>/paper/accounts`，账户 id 作用域降为「用户内唯一」 |

@@ -266,7 +266,7 @@ def collect_resources(
             # signal_/裸名未命中 → 内置信号命名空间, 任何安装自带, 静默跳过
 
         # 用户调参 (换机/分享场景里比默认值重要)
-        ov_path = data_dir / "user_data" / "strategy_overrides" / f"{sid}.json"
+        ov_path = strategy_config._path(data_dir, sid, ensure_dir=False)
         if ov_path.is_file():
             entries[f"user_data/strategy_overrides/{sid}.json"] = ov_path.read_bytes()
 
@@ -911,8 +911,16 @@ def _inspect(uploads: list[tuple[str, bytes]]) -> tuple[dict, dict[str, dict], d
         revision_parts.append((item["key"], _hash(local), _hash(item["payload"])))
     # 本机依赖变化也使预览失效, 防止预览后修改因子而导入另一种语义。
     data_dir = config_backup._data_dir()
-    for directory in ("custom_factors", "custom_signals", "strategy_overrides"):
-        for path in sorted((data_dir / "user_data" / directory).glob("*.json")):
+    from app.services import tenant as _tenant
+
+    local_dirs = (
+        data_dir / "user_data" / "custom_factors",
+        data_dir / "user_data" / "custom_signals",
+        # 策略调参按账号存: 预览的冲突检测必须看当前账号自己的文件
+        _tenant.priv_base(data_dir) / "strategy_overrides",
+    )
+    for local_dir in local_dirs:
+        for path in sorted(local_dir.glob("*.json")):
             revision_parts.append((path.relative_to(data_dir).as_posix(), _hash(path.read_bytes())))
     for source in ("custom", "ai", "composite"):
         for path in sorted((data_dir / "strategies" / source).glob("*.py")):
@@ -935,6 +943,8 @@ def inspect_resources(uploads: list[tuple[str, bytes]]) -> dict:
 
 def _local_dependents(data_dir: Path) -> dict[str, list[str]]:
     """替换前展示本机引用方, 包括经信号/组合因子间接引用的策略。"""
+    from app.strategy import config as strategy_config
+
     edges: dict[str, set[str]] = {}
     labels: dict[str, str] = {}
     signals = _signal_lookup(data_dir)
@@ -967,7 +977,7 @@ def _local_dependents(data_dir: Path) -> dict[str, list[str]]:
                 values = _literals(code)
                 native_signals = values.get("EXECUTION_BACKEND", meta.get("execution_backend")) == "matrix_native"
                 factors, signal_refs = _strategy_refs_from_code(code, include_signal_outputs=not native_signals)
-                override_path = data_dir / "user_data/strategy_overrides" / f"{meta['id']}.json"
+                override_path = strategy_config._path(data_dir, str(meta["id"]), ensure_dir=False)
                 override = _json(override_path.read_bytes()) if override_path.exists() else {}
                 factors.update(override.get("scoring") or {})
                 factors.update(_condition_refs(override.get("overlay_filter") or []))

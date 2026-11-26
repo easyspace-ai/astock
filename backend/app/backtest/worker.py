@@ -168,7 +168,13 @@ def encode_backtest_config(config) -> dict[str, Any]:
     return payload
 
 
-def make_worker_task(kind: str, data_dir: Path, config) -> dict[str, Any]:
+def make_worker_task(
+    kind: str,
+    data_dir: Path,
+    config,
+    *,
+    owner: int | None = None,
+) -> dict[str, Any]:
     if kind == "backtest":
         encoded = encode_backtest_config(config)
     elif kind in ("walkforward", "robust_optimize"):
@@ -185,9 +191,17 @@ def make_worker_task(kind: str, data_dir: Path, config) -> dict[str, Any]:
         encoded = dict(config)
     else:
         raise ValueError(f"unsupported worker task kind: {kind}")
+    if owner is None:
+        # 提交线程可能不是请求线程 (调度线程无 ContextVar), 由调用方显式传入。
+        from app.services import tenant
+
+        owner = tenant.current_user_id()
     return {
         "kind": kind,
         "data_dir": str(data_dir.resolve()),
+        # worker 是独立进程, 必须把账号随任务带过去: 后台没有请求上下文,
+        # 策略参数覆盖 (strategy_overrides) 只会落到 accounts 目录里。
+        "owner": owner,
         "config": encoded,
     }
 
@@ -213,6 +227,13 @@ def _error_message(exc: BaseException) -> str:
 
 
 def _worker_entry(task: dict[str, Any], event_queue, cancel_event) -> None:
+    from app.services import tenant
+
+    with tenant.user_scope(task.get("owner")):
+        _worker_entry_scoped(task, event_queue, cancel_event)
+
+
+def _worker_entry_scoped(task: dict[str, Any], event_queue, cancel_event) -> None:
     sampler = _PeakRssSampler()
     sampler.start()
     started = time.perf_counter()

@@ -335,6 +335,8 @@ def _selected_strategy_metadata(
     strategy_ids: list[str],
     data_dir: Path,
 ) -> list[dict[str, Any]]:
+    from app.strategy import config as strategy_config
+
     if not strategy_ids:
         return []
     engine = getattr(app_state, "strategy_engine", None)
@@ -346,7 +348,7 @@ def _selected_strategy_metadata(
         if strategy.execution_backend != "matrix_native":
             raise ValueError(f"scheduled mining strategy is not matrix-native: {strategy_id}")
         source_path = Path(strategy.file_path) if strategy.file_path is not None else None
-        override_path = data_dir / "user_data" / "strategy_overrides" / f"{strategy_id}.json"
+        override_path = strategy_config._path(data_dir, strategy_id, ensure_dir=False)
         metadata.append(
             {
                 "strategy_id": strategy_id,
