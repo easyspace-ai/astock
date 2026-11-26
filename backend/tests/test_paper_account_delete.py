@@ -38,7 +38,7 @@ def test_delete_empty_account(client: TestClient, tmp_path: Path):
     _mk_account(client)
     r = client.delete("/api/paper/account?account=del_me")
     assert r.status_code == 200 and r.json()["ok"] is True
-    assert not (tmp_path / "paper" / "accounts" / "del_me").exists()
+    assert not (tmp_path / "user_data" / "paper" / "accounts" / "del_me").exists()
     ids = {a["id"] for a in client.get("/api/paper/accounts").json()["accounts"]}
     assert "del_me" not in ids
 
@@ -60,17 +60,17 @@ def test_delete_with_pending_order_requires_force(client: TestClient, tmp_path: 
     ).status_code == 200
     r = client.delete("/api/paper/account?account=del_me")
     assert r.status_code == 400 and "force" in r.json()["detail"]
-    assert (tmp_path / "paper" / "accounts" / "del_me" / "account.json").exists()  # 拒绝时不动数据
+    assert (tmp_path / "user_data" / "paper" / "accounts" / "del_me" / "account.json").exists()  # 拒绝时不动数据
 
     r = client.delete("/api/paper/account?account=del_me&force=true")
     assert r.status_code == 200
-    assert not (tmp_path / "paper" / "accounts" / "del_me").exists()
+    assert not (tmp_path / "user_data" / "paper" / "accounts" / "del_me").exists()
 
 
 def test_delete_with_holding_requires_force(client: TestClient, tmp_path: Path):
     """持仓存在时同样 fail-closed; 直接写台账构造持仓 (绕过撮合, 聚焦删除语义)。"""
     _mk_account(client)
-    fills = tmp_path / "paper" / "accounts" / "del_me" / "fills.jsonl"
+    fills = tmp_path / "user_data" / "paper" / "accounts" / "del_me" / "fills.jsonl"
     fills.parent.mkdir(parents=True, exist_ok=True)
     fill = {
         "seq": 1, "ts": "2026-10-14T10:00:00+08:00", "date": "2026-10-13",
@@ -91,7 +91,7 @@ def test_rounds_endpoint_empty_and_filled(client: TestClient, tmp_path: Path):
     assert client.get("/api/paper/rounds?account=del_me").json() == {"rounds": []}
 
     # 一买一卖 → 一个完整回合
-    fills = tmp_path / "paper" / "accounts" / "del_me" / "fills.jsonl"
+    fills = tmp_path / "user_data" / "paper" / "accounts" / "del_me" / "fills.jsonl"
     fills.parent.mkdir(parents=True, exist_ok=True)
     rows = [
         {"seq": 1, "ts": "2026-10-10T10:00:00+08:00", "date": "2026-10-10", "order_id": "o1",
@@ -125,7 +125,7 @@ def test_compare_without_quote_service_uses_settled(client: TestClient):
 def test_compare_with_live_snapshot(client: TestClient, tmp_path: Path):
     """当日快照就绪 → live_total 按快照价估算 (盘中口径), 定版字段并存。"""
     _mk_account(client, "cmp_a")
-    fills = tmp_path / "paper" / "accounts" / "cmp_a" / "fills.jsonl"
+    fills = tmp_path / "user_data" / "paper" / "accounts" / "cmp_a" / "fills.jsonl"
     fills.parent.mkdir(parents=True, exist_ok=True)
     fills.write_text(json.dumps({
         "seq": 1, "ts": "2026-10-13T10:00:00+08:00", "date": "2026-10-13", "order_id": "o1",

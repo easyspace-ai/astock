@@ -11,6 +11,7 @@ from datetime import date as _date
 from pathlib import Path
 
 from app.definitions import JsonDefinitionStore
+from app.services import tenant
 from app.strategy import monitor_rules
 from app.strategy.monitor import MonitorRuleEngine  # 复用条件文本拼装 (静态方法)
 
@@ -72,21 +73,21 @@ def normalize_lot(lot: dict) -> dict:
 # ── 持久化 (统一契约 Store; normalize_lot 在上方定义) ────
 # 只认 lot_*.json — 目录里的其他文件 (误放的导出等) 不进读取面。
 _LOT_STORE = JsonDefinitionStore(
-    "user_data/lots", glob_pattern="lot_*.json", label="lot", normalize=normalize_lot
+    "lots", glob_pattern="lot_*.json", label="lot", normalize=normalize_lot
 )
 
 
 def load_all(data_dir: Path) -> list[dict]:
     """读取全部批次。损坏的文件被跳过。"""
-    return _LOT_STORE.load_all(data_dir)
+    return _LOT_STORE.load_all(tenant.priv_base(data_dir))
 
 
 def save_one(data_dir: Path, lot: dict) -> None:
-    _LOT_STORE.save_one(data_dir, lot)
+    _LOT_STORE.save_one(tenant.priv_base(data_dir), lot)
 
 
 def delete_one(data_dir: Path, lot_id: str) -> bool:
-    return _LOT_STORE.delete_one(data_dir, lot_id)
+    return _LOT_STORE.delete_one(tenant.priv_base(data_dir), lot_id)
 
 
 # ── 批次 → 监控规则 (纯映射) ───────────────────────────

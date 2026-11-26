@@ -1646,13 +1646,18 @@ class QuoteService:
                         strict=False,
                     ))
                     paper_events: list[dict] = []
-                    for acc_id in paper_trading.list_account_ids(data_dir):
-                        paper_events.extend(
-                            paper_trading.evaluate_intraday(data_dir, snapshot, account_id=acc_id))
-                        feed = rule_events + paper_watch_events
-                        if feed:
-                            created = paper_auto.on_rule_events(data_dir, feed, account_id=acc_id)
-                            paper_events.extend(paper_auto.auto_order_events(created, account_id=acc_id))
+                    # 账户按账号存 → 后台线程无租户上下文, 必须跨账号遍历并逐账户
+                    # 进入 user_scope, 否则读不到任何账号目录下的账户。
+                    from app.services import tenant
+
+                    for owner, acc_id in paper_trading.account_refs(data_dir):
+                        with tenant.user_scope(owner):
+                            paper_events.extend(
+                                paper_trading.evaluate_intraday(data_dir, snapshot, account_id=acc_id))
+                            feed = rule_events + paper_watch_events
+                            if feed:
+                                created = paper_auto.on_rule_events(data_dir, feed, account_id=acc_id)
+                                paper_events.extend(paper_auto.auto_order_events(created, account_id=acc_id))
                     # 成交/自动跟单下单推送 (V3): 复用监控中心既有管道 —— SSE toast /
                     # 语音 (前端按 source 拼文案) / 系统通知 / alert_store 留痕 /
                     # Webhook。全部静默降级。
@@ -1660,7 +1665,7 @@ class QuoteService:
                         self._broadcast_alerts(paper_events)
                         try:
                             from app.services import alert_store
-                            alert_store.append_many(data_dir, paper_events)
+                            alert_store.append_owned(data_dir, paper_events)
                         except Exception as e:  # noqa: BLE001
                             logger.warning("模拟盘成交留痕失败: %s", e)
                         self._maybe_send_system_notifications(paper_events)

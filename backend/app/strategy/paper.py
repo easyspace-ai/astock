@@ -40,6 +40,7 @@ from pathlib import Path
 import polars as pl
 
 from app.market_time import CN_TZ, cn_now, cn_today
+from app.services import tenant
 from app.parquet import scan_daily_parquet
 from app.services.fs_utils import atomic_write_text
 
@@ -76,7 +77,8 @@ def validate_account_id(account_id: str) -> str:
 
 
 def accounts_base(data_dir: Path) -> Path:
-    return Path(data_dir) / "paper" / "accounts"
+    """账户根: <私有根>/paper/accounts (租户 = user_data/users/<uid>)。"""
+    return tenant.priv_base(data_dir) / "paper" / "accounts"
 
 
 def _migrate_legacy(data_dir: Path) -> None:
@@ -200,17 +202,49 @@ def save_account(data_dir: Path, acc: dict, account_id: str = DEFAULT_ACCOUNT_ID
 
 def list_account_ids(data_dir: Path) -> list[str]:
     """全部账户 id (按创建时间; 供钩子/结算遍历)。"""
-    base = accounts_base(data_dir)
-    if not base.exists():
+    return _list_ids_in(accounts_base(data_dir))
+
+
+def account_refs(data_dir: Path) -> list[tuple[int | None, str]]:
+    """全部账户 (owner, account_id), 后台线程跨账号遍历用。
+
+    后台撮合/结算线程没有请求账号上下文, 只看 accounts_base() 会漏掉所有
+    账号目录。这里扫「旧全局布局」+ 每个 user_data/users/<uid>/paper/accounts,
+    返回 (owner, id); owner=None 为账号系统之前的全局旧账户 (共享, 历史兼容)。
+    调用方必须 ``with tenant.user_scope(owner)`` 后再调 evaluate/settle。
+    """
+    out: list[tuple[int | None, str]] = []
+    # owner=None: 账号系统之前的 data/paper/accounts, 以及「全局密码模式」下
+    # 私有根就是 user_data 时形成的 user_data/paper/accounts (单用户部署)。
+    for base in (
+        Path(data_dir) / "paper" / "accounts",
+        Path(data_dir) / "user_data" / "paper" / "accounts",
+    ):
+        if base.is_dir():
+            out.extend((None, aid) for aid in _list_ids_in(base))
+    users_dir = Path(data_dir) / "user_data" / "users"
+    if users_dir.is_dir():
+        for user_dir in sorted(users_dir.iterdir(), key=lambda p: p.name):
+            if not (user_dir.is_dir() and user_dir.name.isdigit()):
+                continue
+            out.extend(
+                (int(user_dir.name), aid)
+                for aid in _list_ids_in(user_dir / "paper" / "accounts")
+            )
+    return out
+
+
+def _list_ids_in(base: Path) -> list[str]:
+    if not base.is_dir():
         return []
-    out: list[tuple[str, str]] = []
+    rows: list[tuple[str, str]] = []
     for p in base.glob("*/account.json"):
         try:
             acc = json.loads(p.read_text(encoding="utf-8"))
-            out.append((acc.get("created_at", ""), acc.get("id", p.parent.name)))
+            rows.append((acc.get("created_at", ""), acc.get("id", p.parent.name)))
         except Exception:
             continue
-    return [aid for _, aid in sorted(out)]
+    return [aid for _, aid in sorted(rows)]
 
 
 def list_accounts(data_dir: Path) -> list[dict]:
@@ -748,7 +782,8 @@ def _fill_order(data_dir: Path, order: dict, raw_price: float, day: str, account
             "severity": "info",
             "conditions": [],
             "logic": "and",
-        }])
+            "owner_id": tenant.current_user_id(),
+        }], tenant.current_user_id())
     except Exception as e:
         logger.warning("paper 成交告警落盘失败 (不影响账务): %s", e)
 
@@ -801,6 +836,7 @@ def _fill_event(fill: dict, account_id: str) -> dict:
     return {
         "source": "paper",
         "type": "fill",
+        "owner_id": tenant.current_user_id(),
         "severity": "info",
         "ts": int(fill["seq"]),
         "symbol": fill["symbol"],

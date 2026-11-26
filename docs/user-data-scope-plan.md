@@ -196,6 +196,24 @@
 遗留（未做，已记录）：策略监控偏好 `strategy_monitor_ids` 仍是全局；`paper_watch` 的「已覆盖」判定跨账号；
 系统通知/webhook 通道是全局配置，A 的规则触发会走全局通道。
 
+### 阶段 1b：批次 / 模拟盘按账号（已完成 2026-11-26）
+
+| 位置 | 改动 |
+| --- | --- |
+| `strategy/lots.py` | 存储根改为相对私有根的 `lots/`（`load_all/save_one/delete_one` 走 `tenant.priv_base`），派生监控规则自然落在本账号规则目录 |
+| `strategy/paper.py` | `accounts_base()` → `<私有根>/paper/accounts`；新增 `account_refs()` 跨账号枚举 `(owner, account_id)`（含 `data/paper/accounts` 旧布局与全局模式的 `user_data/paper/accounts`） |
+| `paper.py` 成交留痕 | 成交告警落盘到当前账号文件，事件带 `owner_id`（SSE 仍广播，前端按 owner 过滤） |
+| 盘中撮合 | `quote_service` 逐 `(owner, acc)` 进入 `tenant.user_scope` 后调 `evaluate_intraday`，告警用 `append_owned` 分流 |
+| 盘后结算 | `daily_pipeline` 同样跨账号遍历 + 逐账户 scope；结算成交留痕 `append_owned` |
+| `paper_watch` | `watched_strategy_ids` 跨账号扫描绑定策略（合成规则仍需全局判断，避免重复注入） |
+| `config_backup` | 备份/恢复新增账号私有的 `lots`、`monitor_rules`、`paper/accounts` 三类路径 |
+
+**旧数据口径**：生产 `user_data/lots` 与 `data/paper/accounts` 均为空（2026-11-26 核对），无需迁移；
+若老部署仍有数据，它们作为 `owner=None` 的「共享旧账户」继续被撮合/结算，但不出现在任何账号自己的列表里。
+
+验证：`tests/test_private_assets_tenant.py` 4 条（批次/账户按账号落盘、`account_refs` 跨账号+旧布局、无 scope 时结算读不到账户）；
+模拟盘 4 个既有测试文件同步改为私有根路径断言；后端全量 **4921 passed**。
+
 ### 阶段 1：私有资产迁移（P0 清单）
 
 按 §1.2 的 1–13 项逐个改入口，每项都是「一处路径 + 一处缓存 key + 一处前端刷新」：

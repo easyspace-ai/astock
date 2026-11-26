@@ -165,6 +165,27 @@ def _classify(rel: PurePosixPath, data_dir: Path) -> tuple[str, Path] | None:
     ):
         return "strategies", data_dir / Path(*parts)
     if (
+        len(parts) == 5
+        and parts[0] == "user_data"
+        and parts[1] == "users"
+        and parts[2].isdigit()
+    ):
+        # 账号私有目录: 批次 / 监控规则 (2026-11-26 起按账号存)
+        if parts[3] == "lots" and parts[4].startswith("lot_") and _name_ok(parts[4], ".json"):
+            return "lots", data_dir / Path(*parts)
+        if parts[3] == "monitor_rules" and _name_ok(parts[4], ".json"):
+            return "monitor_rules", data_dir / Path(*parts)
+    if (
+        len(parts) >= 6
+        and parts[0] == "user_data"
+        and parts[1] == "users"
+        and parts[2].isdigit()
+        and parts[3] == "paper"
+        and parts[4] == "accounts"
+    ):
+        # 账号私有模拟盘账户 (含 orders/nav/auto_rules 子目录)
+        return "paper", data_dir / Path(*parts)
+    if (
         len(parts) == 4
         and parts[0] == "user_data"
         and parts[1] == "users"
@@ -282,6 +303,12 @@ def _collect_backup_files(data_dir: Path) -> list[Path]:
                 p = user_dir / name
                 if p.is_file():
                     out.append(p)
+            _glob(user_dir / "lots", "lot_*.json")
+            _glob(user_dir / "monitor_rules", "*.json")
+            acct_base = user_dir / "paper" / "accounts"
+            if acct_base.is_dir():
+                for pattern in ("*.json", "*.jsonl"):
+                    out.extend(sorted(acct_base.rglob(pattern)))
     _glob(data_dir / "data_sources", "*.yaml")
     _glob(data_dir / "data_sources", "*.yml")
     _glob(data_dir / "analysis_menus", "*.json")

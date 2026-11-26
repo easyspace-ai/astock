@@ -842,8 +842,16 @@ def run_now(
         from app.strategy import paper as paper_trading
         # 逐账户结算 (账户间订单/台账隔离), 汇总合并供日志与结果展示
         totals = {"filled": 0, "expired": 0, "corp_actions": 0, "nav": None, "accounts": []}
-        for acc_id in paper_trading.list_account_ids(repo.store.data_dir):
-            s = paper_trading.settle_day(repo.store.data_dir, today.isoformat(), account_id=acc_id)
+        # 账户按账号存 → 跨账号遍历, 逐账户进入 user_scope 再结算。
+        from app.services import tenant
+
+        refs = paper_trading.account_refs(repo.store.data_dir)
+        for owner, acc_id in refs:
+            if owner is not None:
+                with tenant.user_scope(owner):
+                    s = paper_trading.settle_day(repo.store.data_dir, today.isoformat(), account_id=acc_id)
+            else:
+                s = paper_trading.settle_day(repo.store.data_dir, today.isoformat(), account_id=acc_id)
             totals["filled"] += s.get("filled", 0)
             totals["expired"] += s.get("expired", 0)
             totals["corp_actions"] += s.get("corp_actions", 0)
@@ -859,11 +867,16 @@ def run_now(
             try:
                 from app.services import alert_store
                 settle_events = []
-                for acc_id in paper_trading.list_account_ids(repo.store.data_dir):
-                    settle_events.extend(paper_trading.day_fill_events(
-                        repo.store.data_dir, today.isoformat(), account_id=acc_id))
+                for owner, acc_id in refs:
+                    if owner is not None:
+                        with tenant.user_scope(owner):
+                            settle_events.extend(paper_trading.day_fill_events(
+                                repo.store.data_dir, today.isoformat(), account_id=acc_id))
+                    else:
+                        settle_events.extend(paper_trading.day_fill_events(
+                            repo.store.data_dir, today.isoformat(), account_id=acc_id))
                 if settle_events:
-                    alert_store.append_many(repo.store.data_dir, settle_events)
+                    alert_store.append_owned(repo.store.data_dir, settle_events)
             except Exception as e:
                 logger.warning("模拟盘结算成交留痕失败: %s", e)
         emit("paper_settle", 94, "模拟盘结算完成")

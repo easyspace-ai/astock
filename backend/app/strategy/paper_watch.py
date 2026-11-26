@@ -66,14 +66,23 @@ def sync_from_state(app_state: Any, data_dir: Path) -> dict[str, Any] | None:
 
 
 def watched_strategy_ids(data_dir: Path) -> set[str]:
-    """全部账户「启用的 strategy 型自动跟单规则」绑定的策略 id 集合。"""
+    """全部账户「启用的 strategy 型自动跟单规则」绑定的策略 id 集合。
+
+    账户按账号存: 跨账号遍历 (后台/启动线程没有租户上下文), 逐账户进入
+    user_scope 才能读到该账号目录下的自动跟单规则。
+    """
+    from contextlib import nullcontext
+
+    from app.services import tenant
     from app.strategy import paper, paper_auto
 
     ids: set[str] = set()
-    for acc_id in paper.list_account_ids(data_dir):
-        for rule in paper_auto.load_auto_rules(data_dir, acc_id, enabled_only=True):
-            if rule.get("match_kind") == "strategy" and rule.get("match_id"):
-                ids.add(str(rule["match_id"]))
+    for owner, acc_id in paper.account_refs(data_dir):
+        scope = tenant.user_scope(owner) if owner is not None else nullcontext()
+        with scope:
+            for rule in paper_auto.load_auto_rules(data_dir, acc_id, enabled_only=True):
+                if rule.get("match_kind") == "strategy" and rule.get("match_id"):
+                    ids.add(str(rule["match_id"]))
     return ids
 
 

@@ -630,8 +630,8 @@ def test_legacy_single_account_layout_migrates(tmp_path, monkeypatch):
     acc = paper.get_account(tmp_path)
     assert acc is not None and acc["cash"] == 750000.0
     # 物理迁移到位
-    assert (tmp_path / "paper" / "accounts" / "default" / "account.json").exists()
-    assert (tmp_path / "paper" / "accounts" / "default" / "orders" / "order_x.json").exists()
+    assert (tmp_path / "user_data" / "paper" / "accounts" / "default" / "account.json").exists()
+    assert (tmp_path / "user_data" / "paper" / "accounts" / "default" / "orders" / "order_x.json").exists()
     assert not (legacy / "account.json").exists()
     # 幂等: 重复访问不报错
     assert paper.get_account(tmp_path)["cash"] == 750000.0

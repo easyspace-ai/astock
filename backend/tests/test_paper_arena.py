@@ -102,7 +102,7 @@ def test_compare_arena_fields_with_nav(tmp_path: Path):
     """day_change_pct / last_nav_date 按定版净值序列末两点计算。"""
     c = _client(tmp_path)
     c.post("/api/paper/account", json={"initial_cash": 100000, "name": "甲"})
-    nav_dir = tmp_path / "paper" / "accounts" / "default" / "nav"
+    nav_dir = tmp_path / "user_data" / "paper" / "accounts" / "default" / "nav"
     nav_dir.mkdir(parents=True, exist_ok=True)
     with (nav_dir / "daily.jsonl").open("w", encoding="utf-8") as f:
         f.write(json.dumps({"date": "2026-09-30", "nav": 100000.0}) + "\n")
