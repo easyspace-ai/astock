@@ -55,8 +55,8 @@
 
 | 数据 | 位置 | 为什么特殊 |
 | --- | --- | --- |
-| 自定义信号定义 | `user_data/custom_signals/*.json` | `indicators/pipeline.py` 在生成**全局 enriched** 时加载并编译成 `csg_` 列；enriched 是全市场共享数据集，一旦按用户就变成「每人一份 enriched」 |
-| 自定义/复合因子 | `user_data/custom_factors/*.json` | 同上，因子矩阵物化缓存（`factors/materialize_cache.py`）是全局 key |
+| 自定义信号定义 | 共享层 `user_data/custom_signals/*.json`（内置种子）+ 各账号 `user_data/users/<uid>/custom_signals/` | `indicators/pipeline.py` 在生成**全局 enriched** 时取并集编译成 `csg_` 列；enriched 全站共享，所以每条新信号都会触发全站指标重建。✅ 已按账号隔离（`06a6819`）：账号可写、共享层只读、id 全局唯一 |
+| 自定义/复合因子 | 共享层 `user_data/custom_factors/*.json` + 各账号 `user_data/users/<uid>/custom_factors/` | 同上，因子矩阵物化缓存（`factors/materialize_cache.py`）是全局 key。✅ 已按账号隔离（`06a6819`） |
 | 策略源码 | `data/strategies/{custom,ai,composite}` | 策略引擎启动即全量加载（`main.py` 的 `strategy_dirs`），所有账号看到同一个策略库；策略 ID 是全局唯一命名 |
 
 这三类是「策略研究资产」，合理的语义是**共享库 + owner 标记 + 可见性过滤**，而不是按用户复制一份数据管道。详见 §4.2。
