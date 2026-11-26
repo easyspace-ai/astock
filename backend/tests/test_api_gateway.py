@@ -14,7 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api import auth as auth_api
+from app.api import accounts as accounts_api
 from app.services import api_gateway, api_tokens
 
 
@@ -116,7 +116,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     # TestClient 的 peer 固定为 "testclient"(非内网地址), 门禁按本机放行以聚焦
     # scope/限流矩阵; 公网 403 分支由 test_token_gate_* 用例显式覆盖
-    monkeypatch.setattr(auth_api, "_client_ip", lambda request: "127.0.0.1")
+    monkeypatch.setattr(accounts_api, "_client_ip", lambda request: "127.0.0.1")
 
     @app.middleware("http")
     async def token_gate(request, call_next):
@@ -125,7 +125,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
             return await call_next(request)
         authz = request.headers.get("authorization", "")
         if authz.startswith("Bearer "):
-            gate = api_gateway.token_network_verdict(auth_api._client_ip(request))
+            gate = api_gateway.token_network_verdict(accounts_api._client_ip(request))
             if gate is not None:
                 return JSONResponse(
                     status_code=gate["status"], content={"detail": gate["detail"]},
@@ -262,7 +262,7 @@ def test_token_gate_public_ip_403_before_token_check(
     有效性信号(401)不外露给公网探测者; 被拦请求不消耗限流额度。
     """
     monkeypatch.delenv("API_TOKEN_LOCAL_ONLY", raising=False)
-    monkeypatch.setattr(auth_api, "_client_ip", lambda request: "203.0.113.7")
+    monkeypatch.setattr(accounts_api, "_client_ip", lambda request: "203.0.113.7")
     _, tok = api_tokens.create_token(tmp_path, "公网调用方", ["read:market"])
     hdr = {"Authorization": f"Bearer {tok}"}
 
@@ -273,7 +273,7 @@ def test_token_gate_public_ip_403_before_token_check(
     assert "API_TOKEN_LOCAL_ONLY" in r2.json()["detail"]
 
     # 同一 Token 回到内网: 正常放行且额度未被公网请求消耗 (首扣 → 119)
-    monkeypatch.setattr(auth_api, "_client_ip", lambda request: "192.168.1.10")
+    monkeypatch.setattr(accounts_api, "_client_ip", lambda request: "192.168.1.10")
     r3 = client.get("/api/kline/daily", headers=hdr)
     assert r3.status_code == 200
     assert r3.headers["X-RateLimit-Remaining"] == "119"
@@ -284,7 +284,7 @@ def test_token_gate_env_off_allows_public(
 ):
     """显式放开 (API_TOKEN_LOCAL_ONLY=0): 公网 IP 走完整 evaluate 链路。"""
     monkeypatch.setenv("API_TOKEN_LOCAL_ONLY", "0")
-    monkeypatch.setattr(auth_api, "_client_ip", lambda request: "203.0.113.7")
+    monkeypatch.setattr(accounts_api, "_client_ip", lambda request: "203.0.113.7")
     _, tok = api_tokens.create_token(tmp_path, "公网放开", ["read:market"])
     r = client.get("/api/kline/daily", headers={"Authorization": f"Bearer {tok}"})
     assert r.status_code == 200

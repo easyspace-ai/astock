@@ -41,8 +41,15 @@ vi.mock('@/lib/useQuoteStream', () => ({
   useQuoteStream: () => {}, useQuoteStreamStatus: () => 'connected',
 }))
 vi.mock('@/lib/useMediaQuery', () => ({ useIsDesktop: () => layoutMocks.desktop }))
-// 旧访问密码模式(无邮箱账号): 视为管理员, 保留实时行情开关等配置入口
-vi.mock('@/lib/useAccount', () => ({ useAccountUser: () => ({ data: null, isLoading: false }) }))
+// 管理员账号: 保留实时行情开关等配置入口
+vi.mock('@/lib/useAccount', () => ({
+  useAccountUser: () => ({ data: { email: 'admin@example.com', role: 'admin', perm_role: 'super_admin' }, isLoading: false }),
+  usePermissions: () => ({
+    can: () => true, canAny: () => true, loading: false,
+    user: { email: 'admin@example.com', role: 'admin', perm_role: 'super_admin' }, codes: [],
+  }),
+  userHasPermission: () => true,
+}))
 vi.mock('@/extensions/registry', () => ({ getFrontendExtensionNavigation: () => [] }))
 vi.mock('@/extensions/ExtensionSlot', () => ({ ExtensionSlot: () => null }))
 vi.mock('@/components/Toast', () => ({ ToastContainer: () => null, toast: vi.fn() }))
@@ -100,6 +107,8 @@ it('expands the active folder, preserves watchlist groups and stops hidden group
   await act(async () => folder.click())
   expect(folder.getAttribute('aria-expanded')).toBe('false')
   expect(stats.isActive()).toBe(false)
+  // 管理后台入口在账户下拉内: 超级管理员应能看到
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="账户菜单"]')!.click())
   expect(host.querySelector('a[href="/admin?tab=pages&section=menus"]')).not.toBeNull()
 })
 

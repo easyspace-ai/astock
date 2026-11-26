@@ -31,6 +31,9 @@ QUOTE_BATCH = 60        # MAX_QUOTES_COUNT
 KLINE_PAGE = 800        # MAX_KLINE_COUNT(单请求上限)
 SECURITY_PAGE = 1000    # get_security_list 单页条数
 UNIVERSE_TTL_S = 12 * 3600.0
+# 北交所代码表瞬断后, 不能把进程级标记当永久事实: 启动时一次失败会导致
+# 整个进程生命周期丢掉 920xxx/899050, 直到人工重启。这里改成冷却重试。
+BJ_RETRY_S = 10 * 60.0
 DEFAULT_TIMEOUT_S = 8.0
 
 # 板块客户端需要显式服务器地址(协议返回里拿不到当前连接目标), 可在环境变量覆盖
@@ -106,6 +109,7 @@ class TdxRsClient:
         self._universe: list[str] = []
         self._universe_at = 0.0
         self._bj_unsupported = False
+        self._bj_retry_at = 0.0
         self._last_ok_at = 0.0
         self._block = None
         self._fund = None
@@ -199,6 +203,8 @@ class TdxRsClient:
         stats = {"requested": len(pairs), "skipped": 0, "failed_batches": 0}
         rows: list[dict] = []
         wanted = list(dict.fromkeys((int(m), str(c)) for m, c in pairs))
+        skipped_samples: list[str] = []
+        skipped_total = 0
         for i in range(0, len(wanted), QUOTE_BATCH):
             batch = wanted[i : i + QUOTE_BATCH]
             try:
@@ -209,17 +215,35 @@ class TdxRsClient:
                                len(batch), i // QUOTE_BATCH + 1, e)
                 continue
             expect = {(int(m), str(c)) for m, c in batch}
+            got_keys: set[tuple[int, str]] = set()
             hit = 0
             for row in got or []:
                 key = (int(row.get("market", -1)), str(row.get("code") or ""))
+                got_keys.add(key)
                 if key not in expect:
                     stats["skipped"] += 1
-                    logger.warning("tdxrs 回包校验剔除: 期望外接受到 %s/%s", key[0], key[1])
+                    skipped_total += 1
+                    if len(skipped_samples) < 5:
+                        skipped_samples.append(f"{key[0]}/{key[1]}")
                     continue
                 rows.append(row)
                 hit += 1
             if hit < len(batch):
-                stats["skipped"] += len(batch) - hit
+                missing = len(batch) - hit
+                stats["skipped"] += missing
+                skipped_total += missing
+                if len(skipped_samples) < 5:
+                    skipped_samples.extend(
+                        f"{m}/{c}" for m, c in expect if (m, c) not in got_keys
+                    )
+                    skipped_samples = skipped_samples[:5]
+        if skipped_total:
+            # 退市码/代码顶包是供应商常态, 逐标的 WARNING 会在一次全市场拉取
+            # 里刷出数千行并淹没真正的同步错误。按批次汇总 + 样例即可排障。
+            logger.warning(
+                "tdxrs 回包校验剔除 %d 条 (请求 %d 只, 命中 %d 只), 样例: %s",
+                skipped_total, len(wanted), len(rows), ", ".join(skipped_samples) or "-",
+            )
         return rows, stats
 
     # ---- K 线 ----
@@ -304,6 +328,9 @@ class TdxRsClient:
     def universe(self) -> list[str]:
         """全 A 股票池(TSP 代码格式), 12h 缓存。ETF/指数/债不在内。"""
         now = time.monotonic()
+        # 北交所上次失败且已到冷却点: 让缓存失效一次, 重新尝试 market=2。
+        if self._bj_unsupported and now >= self._bj_retry_at:
+            self._universe = []
         if self._universe and now - self._universe_at < UNIVERSE_TTL_S:
             return list(self._universe)
 
@@ -312,16 +339,23 @@ class TdxRsClient:
         symbols: list[str] = []
         names: dict[tuple[int, str], str] = {}
         for market in (1, 0, 2):
-            if market == 2 and self._bj_unsupported:
+            if market == 2 and self._bj_unsupported and now < self._bj_retry_at:
                 continue
             try:
                 rows = self.security_list(market)
             except TdxRsError as e:
                 if market == 2:  # 北交所部分服务器不返回, 缺了不影响主板
-                    logger.info("tdxrs 北交所代码表不可用: %s", e)
+                    logger.warning(
+                        "tdxrs 北交所代码表暂不可用: %s; %.0f 秒后重试, 本次跳过北交所",
+                        e, BJ_RETRY_S,
+                    )
                     self._bj_unsupported = True
+                    self._bj_retry_at = now + BJ_RETRY_S
                     continue
                 raise
+            if market == 2:
+                self._bj_unsupported = False
+                self._bj_retry_at = 0.0
             for row in rows:
                 code = str(row.get("code") or "")
                 name = str(row.get("name") or "").strip()

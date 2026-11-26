@@ -128,7 +128,7 @@ export function SettingsImportCenterPanel() {
         const preferred = next.preview.roots.filter(key => candidates.includes(key))
         setSelected(new Set(preferred.length ? preferred : candidates.length ? candidates : next.preview.roots))
       }
-      if (next.kind === 'backup') setCategories(new Set(next.preview.categories.filter(c => c.key !== 'secrets' && c.key !== 'auth').map(c => c.key)))
+      if (next.kind === 'backup') setCategories(new Set(next.preview.categories.filter(c => c.key !== 'secrets').map(c => c.key)))
       if (next.kind === 'page') setPageId(next.preview.suggested_id)
     } catch (e) { setError(e instanceof Error ? e.message : '文件识别失败，请检查文件格式后重试') }
     finally { busyRef.current = false; setBusy(false) }
@@ -159,7 +159,7 @@ export function SettingsImportCenterPanel() {
       } else if (review.kind === 'backup') {
         const applied = await api.configBackupApply(files[0], allowOverwrite, [...categories])
         const failed = applied.categories.flatMap(c => c.failed.map(f => c.label + ' · ' + f.file + '：' + f.error))
-        next = { title: failed.length ? '配置恢复完成，部分条目失败' : '所选配置恢复完成', message: '成功恢复 ' + applied.categories.reduce((sum, c) => sum + c.imported, 0) + ' 项，跳过同名项 ' + applied.categories.reduce((sum, c) => sum + c.skipped_conflict, 0) + ' 项。', details: failed.length ? failed : ['只应用已勾选的类别；未选类别保持原样。', ...(categories.has('auth') ? ['访问凭证已恢复，可能需要使用备份中的密码重新登录。'] : [])] }
+        next = { title: failed.length ? '配置恢复完成，部分条目失败' : '所选配置恢复完成', message: '成功恢复 ' + applied.categories.reduce((sum, c) => sum + c.imported, 0) + ' 项，跳过同名项 ' + applied.categories.reduce((sum, c) => sum + c.skipped_conflict, 0) + ' 项。', details: failed.length ? failed : ['只应用已勾选的类别；未选类别保持原样。', ...(categories.has('secrets') ? ['密钥已恢复，相关配置将按新密钥生效。'] : [])] }
         await Promise.allSettled(INVALIDATE_KEYS.map(queryKey => qc.invalidateQueries({ queryKey })))
         await refreshResourceQueries(qc)
       } else if (review.kind === 'resources') {
@@ -255,9 +255,9 @@ export function SettingsImportCenterPanel() {
                   <div className="divide-y divide-border border-y border-border">{review.preview.categories.map(category => <label key={category.key} className="flex items-start gap-3 py-3 text-sm">
                     <input className="mt-1 accent-accent" type="checkbox" disabled={busy} checked={categories.has(category.key)} onChange={() => setCategories(previous => toggle(previous, category.key))} aria-label={'恢复' + category.label} />
                     <span className="min-w-0 flex-1"><span className="text-foreground">{category.label}</span><span className="mt-1 block text-xs text-secondary">{category.count} 项{category.conflicts ? ' · ' + category.conflicts + ' 项同名' : ''}</span></span>
-                    {['secrets', 'auth'].includes(category.key) && <span className="text-xs text-amber-800 dark:text-amber-300">敏感项</span>}
+                    {category.key === 'secrets' && <span className="text-xs text-amber-800 dark:text-amber-300">敏感项</span>}
                   </label>)}</div>
-                  <div className="mt-4"><Notice warning>密钥（API Key）和访问凭证需单独勾选。偏好与密钥按合并写入；恢复敏感项会覆盖本机同名值。</Notice></div>
+                  <div className="mt-4"><Notice warning>密钥（API Key）需单独勾选。偏好与密钥按合并写入；恢复敏感项会覆盖本机同名值。</Notice></div>
                   {!!review.preview.conflict_files && <label className="mt-4 flex items-start gap-2 text-xs leading-6 text-secondary"><input type="checkbox" checked={allowOverwrite} disabled={busy} onChange={e => setAllowOverwrite(e.target.checked)} className="mt-1 accent-accent" />允许覆盖已存在的同名文件（默认跳过）</label>}
                   {!!review.preview.out_of_scope_files && <p className="mt-3 text-xs text-secondary">{review.preview.out_of_scope_files} 个不受支持的文件不会恢复。</p>}
                 </section>}

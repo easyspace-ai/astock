@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
+import uuid
 from urllib.parse import quote
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -54,7 +57,9 @@ from app.api import (
     watchlist,
 )
 from app.api import accounts as accounts_api
-from app.api import auth as auth_api
+from app.api import admin_users as admin_users_api
+from app.api import system as system_api
+from app.api import permissions as permissions_api
 from app.api import settings as settings_api
 from app.api import upgrade_guard as upgrade_guard_api
 from app.api.routes import router as core_router
@@ -68,6 +73,7 @@ from app.extensions.loader import (
 )
 from app.frontend_static import FrontendStaticFiles, frontend_file_response
 from app.jobs import daily_pipeline
+from app.services import page_access
 from app.services.daily_health import DailyIntegrityError
 from app.services.heavy_job_limiter import HeavyJobLimitTimeoutError
 from app.services.matrix_prewarm_owner import MatrixCachePrewarmOwner
@@ -85,15 +91,43 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 第三方 HTTP 客户端在 INFO 级别会逐请求打印完整 URL/状态, 盘中全量拉取会
+# 把业务 ERROR 淹没。HTTP 访问日志由 request_context_middleware 统一记录。
+for _noisy_logger in ("httpx", "httpcore", "urllib3", "apscheduler.executors.default"):
+    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
+
 # 追加文件日志: uvicorn (含 --reload 开发模式) 默认只有 StreamHandler, 同步/管道等
 # 运行时日志仅出现在 dev 终端, 关掉或滚屏后即丢失, 排查「同步后日志没落」时无处可查。
 # 落盘到 data/logs/backend.log 与桌面版 (desktop.py:_setup_logging → logs/desktop.log)
 # 行为对齐, 事后可查。桌面版 (frozen) 已由 desktop.py 写 desktop.log, 此处跳过避免
 # 重复落盘; 大小切割与旧位置迁移见 app/logfile.py。
-if not getattr(sys, "frozen", False):
+# TSP_DISABLE_FILE_LOG=1 供 pytest 隔离: 测试导入 app.main 时不得写生产日志。
+if not getattr(sys, "frozen", False) and os.environ.get("TSP_DISABLE_FILE_LOG") != "1":
     from app.logfile import attach_rotating_log
+    from app.log_safety import install_redaction
 
-    attach_rotating_log("backend.log", max_mb=10, backup_count=3)
+    _backend_log_handler = attach_rotating_log(
+        "backend.log",
+        max_mb=settings.log_file_max_mb,
+        backup_count=settings.log_file_backup_count,
+    )
+    _error_log_handler = attach_rotating_log(
+        "error.log",
+        max_mb=settings.error_log_max_mb,
+        backup_count=settings.error_log_backup_count,
+        level=logging.ERROR,
+    )
+    # uvicorn 的 access/error logger 默认不向 root 传播; 把同一文件 handler
+    # 直接挂到它们上面, 500 traceback 和访问日志才会进入轮转文件。
+    for _name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        _uvicorn_logger = logging.getLogger(_name)
+        if _backend_log_handler is not None:
+            _uvicorn_logger.addHandler(_backend_log_handler)
+        if _error_log_handler is not None:
+            _uvicorn_logger.addHandler(_error_log_handler)
+        _uvicorn_logger.setLevel(logging.INFO)
+        _uvicorn_logger.propagate = False
+    install_redaction()
 
 
 @asynccontextmanager
@@ -114,15 +148,6 @@ async def _application_lifespan(app: FastAPI):
         logger.info("sync route thread pool: %d", settings.api_sync_thread_pool)
     except Exception as e:  # noqa: BLE001
         logger.warning("thread pool resize failed (ignored): %s", e)
-
-    # 首次启动: 若配置了 AUTH_PASSWORD 环境变量且未设过密码, 用它初始化。
-    # 公网部署免 SSH 端口转发; 已设过密码则不覆盖 (改密码走 UI)。
-    try:
-        with startup_phase(logger, "auth bootstrap"):
-            from app.services import auth as auth_service
-            auth_service.bootstrap_from_env()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("auth bootstrap failed: %s", e)
 
     # 多用户账号体系: 建表/迁移 + 可选环境变量初始化管理员
     # (ADMIN_EMAIL/ADMIN_PASSWORD 仅在用户表为空时生效)。
@@ -307,8 +332,13 @@ async def _application_lifespan(app: FastAPI):
         import threading
 
         from app.services.data_integrity import boot_integrity_check
+        from app.services.daily_catchup import launch_daily_catchup
 
-        timer = threading.Timer(30.0, boot_integrity_check, args=(app.state,))
+        def _boot_checks() -> None:
+            boot_integrity_check(app.state)
+            launch_daily_catchup(app.state, allow_late=True)
+
+        timer = threading.Timer(30.0, _boot_checks)
         timer.daemon = True  # 不阻塞进程退出
         timer.start()
     except Exception as e:  # noqa: BLE001
@@ -363,6 +393,16 @@ async def _application_lifespan(app: FastAPI):
     # 自愈看门狗: 探测 polars 闸与写锁, 僵死时退出交由 supervisor 拉起 (兜底层)。
     from app.watchdog import start_watchdog
     app.state.watchdog = start_watchdog(app.state, repo)
+
+    # 系统级运维巡检: 磁盘水位、日志落盘、调度器心跳、数据完整性。
+    # 独立后台线程, 即使 API 层卡住也能发现并告警。
+    try:
+        from app.services.ops_monitor import start_ops_monitor
+
+        app.state.ops_monitor = start_ops_monitor(app.state)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ops monitor not started: %s", e)
+        app.state.ops_monitor = None
 
     # 策略引擎
     from app.services.screener import ScreenerService
@@ -524,6 +564,12 @@ async def _application_lifespan(app: FastAPI):
         wd = getattr(app.state, "watchdog", None)
         if wd:
             await wd.stop()
+        ops = getattr(app.state, "ops_monitor", None)
+        if ops:
+            ops.stop()
+        system_alert_mod = sys.modules.get("app.services.system_alert")
+        if system_alert_mod is not None:
+            system_alert_mod.shutdown()
         if not matrix_prewarm_owner.shutdown(timeout=5.0):
             logger.warning("matrix cache prewarm did not stop within 5 seconds")
         mmanager = getattr(app.state, "mining_manager", None)
@@ -608,20 +654,22 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
 
 
 # ================================================================
 # 访问认证中间件
 # ================================================================
-# 拦截所有 /api/ 请求, 三种状态:
-#   1. 未设密码 + 本机/内网 → 放行(让本机用户访问面板 + 调 /api/auth/setup 设密码)
-#   2. 未设密码 + 公网       → 拒绝(403, 防裸奔也防抢占; 引导本机设密码)
-#   3. 已设密码              → 检查 session, 无效则 401(前端跳登录)
-# 白名单: /api/auth/* (设密码/登录本身)、/api/accounts/* (注册/登录/状态)、/health 等探活。
-_AUTH_WHITELIST_PREFIX = ("/api/auth/", "/api/accounts/")
+# 拦截所有 /api/ 请求, 账号体系是唯一认证通道:
+#   1. 尚无邮箱账号 + 本机/内网 → 放行(让本机用户注册首个管理员)
+#   2. 尚无邮箱账号 + 公网      → 拒绝(403, 防陌生人抢占首个管理员)
+#   3. 已有账号                → 校验邮箱账号会话, 无效则 401(前端跳登录)
+# 白名单: /api/accounts/* (注册/登录/状态本身)、/health 等探活。
+_AUTH_WHITELIST_PREFIX = ("/api/accounts/",)
 _AUTH_WHITELIST_EXACT = (
     "/health",
+    "/ready",
     "/api/health",
     "/openapi.json",
     "/api/openapi.json",
@@ -660,17 +708,17 @@ async def auth_middleware(request: Request, call_next):
     # CORS 预检不带凭据, 直接放行 (CORSMiddleware 在外层应答)
     if request.method == "OPTIONS":
         return await call_next(request)
-    # 白名单放行(设密码/登录/探活本身不拦)
+    # 白名单放行(注册/登录/探活本身不拦)
     if path.startswith(_AUTH_WHITELIST_PREFIX) or path in _AUTH_WHITELIST_EXACT:
         return await call_next(request)
 
-    # ── API Token 通道 (外部调用方; 与密码会话并行, 见 open-platform-plan §4) ──
+    # ── API Token 通道 (外部调用方; 与邮箱账号会话并行, 见 open-platform-plan §4) ──
     authz = request.headers.get("authorization", "")
     if authz.startswith("Bearer "):
         from app.services import api_gateway
         # 网络门禁先行: 默认仅本机/内网可调 Token 通道 (API_TOKEN_LOCAL_ONLY=0 放开);
         # 先于 evaluate 拦截 → 不消耗限流额度, 公网探测者也拿不到 Token 有效性信号
-        gate = api_gateway.token_network_verdict(auth_api._client_ip(request))
+        gate = api_gateway.token_network_verdict(accounts_api._client_ip(request))
         if gate is not None:
             return JSONResponse(
                 status_code=gate["status"], content={"detail": gate["detail"]},
@@ -688,23 +736,22 @@ async def auth_middleware(request: Request, call_next):
             response.headers[k] = v
         return response
 
-    from app.services import auth as auth_service
     from app.services import user_store as user_store_service
-    # 情况 1+2: 既未设访问密码、也没有任何邮箱账号 (系统未初始化)
-    if not auth_service.is_configured() and not user_store_service.has_users():
-        # 本机/内网 → 放行(服务器主人可访问, 并去 /login 注册首个管理员/设密码)
-        if auth_api._is_local_network(auth_api._client_ip(request)):
+    # 情况 1+2: 没有任何邮箱账号 (系统未初始化)
+    if not user_store_service.has_users():
+        # 本机/内网 → 放行, 由 /login 注册首个管理员
+        if accounts_api._is_local_network(accounts_api._client_ip(request)):
             return await call_next(request)
         # 公网 → 拒绝。不裸奔, 也不给公网初始化的机会(防抢占)
         return JSONResponse(
             status_code=403,
             content={
-                "detail": "面板尚未初始化,请通过 SSH/本机浏览器访问以注册管理员或设置密码",
+                "detail": "面板尚未初始化,请通过 SSH/本机浏览器访问以注册管理员",
                 "code": "NOT_INITIALIZED",
             },
         )
 
-    # 情况 3: 已初始化, 检查会话 (优先邮箱账号会话, 兼容原面板密码会话)
+    # 情况 3: 已初始化, 只认邮箱账号会话
     user_token = request.cookies.get(accounts_api.COOKIE_NAME)
     if user_token:
         current_user = user_store_service.get_user_by_token(user_token)
@@ -714,58 +761,141 @@ async def auth_middleware(request: Request, call_next):
             from app.services import tenant as tenant_service
             tenant_service.set_current_user(current_user["id"])
             return await call_next(request)
-    token = request.cookies.get(auth_api.COOKIE_NAME)
-    if token and auth_service.is_valid_session(token):
-        return await call_next(request)
     # 未登录: 401(前端跳登录页)
     return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
 
 
+# ================================================================
+# 请求级可观测性
+# ================================================================
+# 该中间件最后注册 => 位于认证/业务中间件最外层: request_id 在任何handler
+# 之前写入 request.state, 异常兜底和访问日志都能拿到同一编号。
+_REQUEST_ID_SAFE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+
+def _new_request_id(raw: str | None) -> str:
+    """只接受长度/字符集合理的上游 request id, 防止日志注入。"""
+    value = (raw or "").strip()
+    if 8 <= len(value) <= 64 and all(ch in _REQUEST_ID_SAFE for ch in value):
+        return value
+    return uuid.uuid4().hex[:16]
+
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    request_id = _new_request_id(request.headers.get("x-request-id"))
+    request.state.request_id = request_id
+    started = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+    except Exception:
+        logger.error(
+            "unhandled request exception | request_id=%s method=%s path=%s",
+            request_id, request.method, request.url.path,
+            exc_info=True,
+        )
+        try:
+            from app.services.system_alert import record_http_status
+
+            record_http_status(500)
+        except Exception:  # noqa: BLE001 — 可观测性不得反噬主流程
+            logger.debug("system_alert 5xx 计数失败", exc_info=True)
+        response = JSONResponse(
+            status_code=500,
+            content={
+                "detail": "服务器内部错误",
+                "code": "internal_error",
+                "request_id": request_id,
+            },
+            headers={"X-Request-ID": request_id},
+        )
+    finally:
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+
+    response.headers["X-Request-ID"] = request_id
+    path = request.url.path
+    if path.startswith("/api/"):
+        user = getattr(request.state, "user", None) or {}
+        user_id = user.get("id") if isinstance(user, dict) else None
+        level = logging.ERROR if status_code >= 500 else logging.INFO
+        # 不记录 query, 防止 token/webhook 等 query 凭证落盘; 路径足够定位。
+        logger.log(
+            level,
+            "http request | request_id=%s method=%s path=%s status=%s duration_ms=%.1f user_id=%s",
+            request_id, request.method, path, status_code, elapsed_ms,
+            user_id if user_id is not None else "-",
+        )
+        if elapsed_ms >= 2000.0:
+            logger.warning(
+                "slow request | request_id=%s method=%s path=%s status=%s duration_ms=%.0f",
+                request_id, request.method, path, status_code, elapsed_ms,
+            )
+        if status_code >= 500:
+            try:
+                from app.services.system_alert import record_http_status
+
+                record_http_status(status_code)
+            except Exception:  # noqa: BLE001
+                logger.debug("system_alert 5xx 计数失败", exc_info=True)
+    return response
+
+
 # 路由
+# 业务路由按「哪些页面会读它」挂页面权限依赖（anyOf），页面权限不再只是前端隐藏。
+# 认证/账号/管理后台/个人设置/全局轮询（alerts/events/task-registry）不挂页面依赖。
+def _page_deps(name: str) -> list:
+    return [
+        Depends(permissions_api.require_page_access(*page_access.PAGE_ACCESS[name]))
+    ]
+
+
 app.include_router(core_router)
-app.include_router(auth_api.router)
 app.include_router(accounts_api.router)
-app.include_router(kline.router)
-app.include_router(watchlist.router)
-app.include_router(screener.router)
-app.include_router(backtest.router)
-app.include_router(factors.router)
-app.include_router(definitions.router)
-app.include_router(mining.router)
-app.include_router(guardian.router)
-app.include_router(lab.router)
-app.include_router(intraday.router)
-app.include_router(indices.router)
-app.include_router(overview.router)
+app.include_router(admin_users_api.router)
+app.include_router(system_api.router)
+app.include_router(kline.router, dependencies=_page_deps("kline"))
+app.include_router(watchlist.router, dependencies=_page_deps("watchlist"))
+app.include_router(screener.router, dependencies=_page_deps("screener"))
+app.include_router(backtest.router, dependencies=_page_deps("backtest"))
+app.include_router(factors.router, dependencies=_page_deps("factors"))
+app.include_router(definitions.router, dependencies=_page_deps("definitions"))
+app.include_router(mining.router, dependencies=_page_deps("mining"))
+app.include_router(guardian.router, dependencies=_page_deps("guardian"))
+app.include_router(lab.router, dependencies=_page_deps("lab"))
+app.include_router(intraday.router, dependencies=_page_deps("intraday"))
+app.include_router(indices.router, dependencies=_page_deps("indices"))
+app.include_router(overview.router, dependencies=_page_deps("overview"))
 app.include_router(pages_admin.router)
-app.include_router(paper.router)
-app.include_router(abnormal.router)
-app.include_router(regime.router)
+app.include_router(paper.router, dependencies=_page_deps("paper"))
+app.include_router(abnormal.router, dependencies=_page_deps("abnormal"))
+app.include_router(regime.router, dependencies=_page_deps("regime"))
 app.include_router(analysis.router)
-app.include_router(pipeline.router)
-app.include_router(position_policies.router)
-app.include_router(data.router)
-app.include_router(ext_data.router)
+app.include_router(pipeline.router, dependencies=_page_deps("pipeline"))
+app.include_router(position_policies.router, dependencies=_page_deps("position_policies"))
+app.include_router(data.router, dependencies=_page_deps("data"))
+app.include_router(ext_data.router, dependencies=_page_deps("ext_data"))
 app.include_router(ext_pages.router)
 app.include_router(task_registry.router)
-app.include_router(financials.router)
-app.include_router(stock_analysis.router)
-app.include_router(stock_growth.router)
+app.include_router(financials.router, dependencies=_page_deps("financials"))
+app.include_router(stock_analysis.router, dependencies=_page_deps("stock_analysis"))
+app.include_router(stock_growth.router, dependencies=_page_deps("stock_growth"))
 app.include_router(aistock_proxy.router)
-app.include_router(market_recap.router)
+app.include_router(market_recap.router, dependencies=_page_deps("market_recap"))
 app.include_router(settings_api.router)
 app.include_router(upgrade_guard_api.router)
-app.include_router(strategy.router)
-app.include_router(strategy_pool.router)
-app.include_router(signals.router)
-app.include_router(monitor_rules.router)
+app.include_router(strategy.router, dependencies=_page_deps("strategy"))
+app.include_router(strategy_pool.router, dependencies=_page_deps("strategy_pool"))
+app.include_router(signals.router, dependencies=_page_deps("signals"))
+app.include_router(monitor_rules.router, dependencies=_page_deps("monitor_rules"))
 app.include_router(config_backup.router)
 app.include_router(import_center.router)
-app.include_router(lots.router)
+app.include_router(lots.router, dependencies=_page_deps("lots"))
 app.include_router(alerts.router)
 app.include_router(events.router)
-app.include_router(rps.router)
-app.include_router(sector_rotation.router)
+app.include_router(rps.router, dependencies=_page_deps("rps"))
+app.include_router(sector_rotation.router, dependencies=_page_deps("sector_rotation"))
 
 # 二次开发路由与小粒度策略在所有核心路由后注册, 禁止覆盖核心路径。
 extension_registry, extension_load_errors = configure_backend_extensions(app)
@@ -824,6 +954,37 @@ async def daily_integrity_error_handler(request: Request, exc: DailyIntegrityErr
 @app.exception_handler(ProviderRequestError)
 async def provider_request_error_handler(request: Request, exc: ProviderRequestError) -> JSONResponse:
     return JSONResponse(status_code=502, content={"detail": str(exc), "code": "provider_request"})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """全局未捕获异常兜底: 记录完整堆栈 + 请求上下文, 返回可追踪的错误编号。
+
+    业务异常 (ProviderRequestError / CapabilityDenied / DailyIntegrityError 等)
+    有各自的语义 handler, 不会进入这里; 这里只处理真正未预期的异常。
+    """
+    request_id = getattr(request.state, "request_id", None) or _new_request_id(None)
+    logger.error(
+        "unhandled exception | request_id=%s method=%s path=%s",
+        request_id, request.method, request.url.path,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    try:
+        from app.services.system_alert import record_http_status
+
+        record_http_status(500)
+    except Exception:  # noqa: BLE001
+        logger.debug("system_alert 5xx 计数失败", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "服务器内部错误",
+            "code": "internal_error",
+            "request_id": request_id,
+        },
+        headers={"X-Request-ID": request_id},
+    )
+
 
 # 生产期静态文件(前端 dist)
 def _register_static_routes(target: FastAPI, static_dir: Path) -> None:
@@ -886,19 +1047,16 @@ def _register_static_routes(target: FastAPI, static_dir: Path) -> None:
         return {"error": "frontend not built"}
 
     def _admin_session_state(request: Request) -> tuple[bool, bool]:
-        """返回 (已登录, 是否管理员)。管理后台 HTML 也要先验会话。"""
-        from app.services import auth as auth_service
+        """返回 (已登录, 是否有后台权限)。管理后台 HTML 也要先验会话。"""
+        from app.services import rbac as rbac_service
         from app.services import user_store as user_store_service
 
         user_token = request.cookies.get(accounts_api.COOKIE_NAME)
         if user_token:
             current = user_store_service.get_user_by_token(user_token)
             if current is not None:
-                is_admin = user_store_service.effective_role(current) == user_store_service.ROLE_ADMIN
-                return True, is_admin
-        token = request.cookies.get(auth_api.COOKIE_NAME)
-        if token and auth_service.is_valid_session(token):
-            return True, True  # 旧访问密码模式: 登录即管理员
+                can_admin = rbac_service.ADMIN_ACCESS in user_store_service.user_permissions(current)
+                return True, can_admin
         # 未初始化也一律先去 /login: 首个注册账号自动成为超级管理员,
         # 后台不向任何未登录请求直接返回页面。
         return False, False

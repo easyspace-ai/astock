@@ -14,6 +14,9 @@ from logging.handlers import RotatingFileHandler
 
 logger = logging.getLogger(__name__)
 
+# 文件日志一旦因磁盘满/占用停用, 进程内不会自动恢复; 运维监控据此告警。
+_file_logging_disabled = False
+
 # 迁移旧位置时最多回看的轮转编号 (RotatingFileHandler 现存产物 .1/.2/...)
 _LEGACY_ROTATIONS = 5
 
@@ -60,10 +63,18 @@ class StallSafeRotatingFileHandler(RotatingFileHandler):
                            type(exc).__name__ if exc else "未知错误", exc)
             return
         self._stopping = True
+        global _file_logging_disabled
+        _file_logging_disabled = True
+        if isinstance(exc, OSError) and getattr(exc, "errno", None) == 28:
+            reason = "磁盘空间不足 (Errno 28: No space left on device)"
+        else:
+            reason = (
+                f"{exc}。可能是日志文件被其他进程占用 (Windows: 残留 backend 进程"
+                f"或编辑器打开 {self.baseFilename})"
+            )
         logger.error(
-            "文件日志已停用: %s。多为日志文件被其他进程占用 (Windows: 残留 backend 进程"
-            "或编辑器打开 %s)。终端日志不受影响, 清理占用后重启恢复。",
-            exc, self.baseFilename,
+            "文件日志已停用: %s。终端日志不受影响; 释放空间/占用后重启恢复。",
+            reason,
         )
         root = logging.getLogger()
         if self in root.handlers:
@@ -91,14 +102,22 @@ def _migrate_legacy(log_dir, filename: str) -> None:
             pass
 
 
-def attach_rotating_log(filename: str, *, max_mb: int, backup_count: int) -> None:
+def attach_rotating_log(
+    filename: str,
+    *,
+    max_mb: int,
+    backup_count: int,
+    level: int = logging.NOTSET,
+) -> StallSafeRotatingFileHandler | None:
     """给 root logger 追加一个写 data/logs/<filename> 的轮转文件 handler。
 
     任何失败只 warning 不抛 —— 日志落盘永远不阻断启动
     (对齐 main.py / desktop.py 两处调用点原有的容错语义)。
+    level 用于 error.log 只收 ERROR+; 默认 NOTSET 保留调用方日志级别。
     """
     try:
         from app.config import settings
+        from app.log_safety import RedactingFormatter, install_redaction
 
         log_dir = settings.data_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -109,9 +128,22 @@ def attach_rotating_log(filename: str, *, max_mb: int, backup_count: int) -> Non
             backupCount=backup_count,
             mode="a", encoding="utf-8", errors="replace",
         )
+        handler.setLevel(level)
         handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+            RedactingFormatter(
+                logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+            )
         )
         logging.getLogger().addHandler(handler)
+        install_redaction()
+        return handler
     except Exception as e:  # noqa: BLE001
+        global _file_logging_disabled
+        _file_logging_disabled = True
         logger.warning("文件日志初始化失败, 仅输出到终端: %s", e)
+        return None
+
+
+def file_logging_disabled() -> bool:
+    """当前进程是否已因错误停用文件日志 (供系统健康/磁盘监控使用)。"""
+    return _file_logging_disabled

@@ -422,7 +422,7 @@ CODEX_CLI_VERSION=0.144.3 docker compose up --build
 
 </details>
 
-> 📖 Docker 进阶、老 CPU 兼容、访问密码设置等见 [docs/deployment.md](./docs/deployment.md)。
+> 📖 Docker 进阶、老 CPU 兼容、管理员账号初始化等见 [docs/deployment.md](./docs/deployment.md)。
 
 <a id="install-ai"></a>
 
@@ -592,9 +592,10 @@ PORT=3018                      # 服务端口
 
 | 文档                                                                                               | 内容                                                                 |
 | :--- | :--- |
-| [部署指南](./docs/deployment.md) | 部署方式(Dev / Docker / GH Actions)、老 CPU 兼容、更新代码、访问密码 |
-| [配置说明](./docs/configuration.md) | 所有 `.env` 配置项详解(数据源、AI、服务、密码、数据目录) |
+| [部署指南](./docs/deployment.md) | 部署方式(Dev / Docker / GH Actions)、老 CPU 兼容、更新代码、管理员账号初始化 |
+| [配置说明](./docs/configuration.md) | 所有 `.env` 配置项详解(数据源、AI、服务、管理员账号、数据目录) |
 | [完整功能说明](./docs/features.md) | 各功能模块详细说明(策略/指标/回测/监控/个股分析/数据扩展/开放接口) |
+| [用户手册(HTML)](./docs-site/index.html) | 面向部署者与使用者的在线手册:快速开始、功能导览、配置、数据维护、备份迁移、排错与术语表 |
 
 ### 策略与研究
 

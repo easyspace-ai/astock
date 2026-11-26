@@ -314,8 +314,9 @@ def test_uninstall_restores_routes_and_provider_when_refresh_fails(isolated, mon
 
 def test_management_api_accepts_confirmed_route_reset_and_refreshes_capabilities(isolated, monkeypatch):
     from app.tickflow import policy
+    from app.services import user_store
 
-    monkeypatch.setattr("app.services.auth.is_configured", lambda: False)
+    monkeypatch.setattr(user_store, "has_users", lambda: False)
     sentinel = object()
     monkeypatch.setattr(policy, "detect_capabilities", lambda: sentinel)
     install(bundle())
@@ -416,8 +417,8 @@ def test_handle_delays_close_during_concurrent_request():
 
 
 def test_management_auth_and_upload_api(isolated, monkeypatch):
-    from app.services import auth
-    monkeypatch.setattr(auth, "is_configured", lambda: False)
+    from app.services import user_store
+    monkeypatch.setattr(user_store, "has_users", lambda: False)
     app = FastAPI()
     app.include_router(router)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000)) as client:
@@ -433,15 +434,18 @@ def test_management_auth_and_upload_api(isolated, monkeypatch):
 
 def test_management_allows_admin_user_session(isolated, monkeypatch):
     """邮箱登录的 admin 会话可管理插件; 非 admin 与无会话仍拒绝。"""
-    from app.services import auth, user_store
-    monkeypatch.setattr(auth, "is_configured", lambda: True)
-    monkeypatch.setattr(auth, "is_valid_session", lambda token: False)
+    from app.services import rbac, user_store
+    monkeypatch.setattr(user_store, "has_users", lambda: True)
     monkeypatch.setattr(
         user_store,
         "get_user_by_token",
         lambda token: {"id": 1, "is_active": True, "role": "admin", "subscription_expires_at": None}
         if token == "admin-token"
         else ({"id": 2, "is_active": True, "role": "free", "subscription_expires_at": None} if token == "free-token" else None),
+    )
+    monkeypatch.setattr(
+        user_store, "user_permissions",
+        lambda user: frozenset({rbac.ADMIN_PAGES_MANAGE}) if user["id"] == 1 else frozenset(),
     )
     app = FastAPI()
     app.include_router(router)

@@ -15,7 +15,9 @@ MARKET_SZ = 0
 MARKET_SH = 1
 MARKET_BJ = 2
 
-# 上交所指数白名单(000001 上证指数与深市股票同码, 只能靠后缀区分)
+# 上交所指数代码统一以 000 开头(000001 上证指数与深市股票同码, 只能靠后缀区分)。
+# 不能用固定白名单: 000002(上证A股指数)、000680(科创综指)等未列入白名单时会被
+# 误判为股票, 走错取数接口并返回空/错行。SH_INDEX 仅保留给显式别名和历史引用。
 SH_INDEX = frozenset({"000001", "000300", "000905", "000852", "000016", "000688", "000985"})
 SH_INDEX_ALIAS = {"999999.SH": "000001.SH"}  # 兼容 TdxQuant 时代的上证指数别名
 
@@ -41,12 +43,14 @@ def normalize(symbol: str) -> str:
 
 
 def is_index(symbol: str) -> bool:
-    """判断是否为指数代码(按后缀 + 白名单/前缀)。"""
+    """判断是否为指数代码(按后缀 + 指数代码前缀)。"""
     sym = normalize(symbol)
     if sym.endswith(".SH"):
-        return sym[:6] in SH_INDEX
+        return sym[:6].startswith("000") or sym[:6] in SH_INDEX
     if sym.endswith(".SZ"):
         return sym[:6].startswith("399")
+    if sym.endswith(".BJ"):
+        return sym[:6].startswith("899")
     return False
 
 

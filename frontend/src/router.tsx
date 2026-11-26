@@ -1,8 +1,10 @@
 import { lazy, Suspense } from 'react'
 import { createBrowserRouter, Navigate, useLocation, useSearchParams } from 'react-router-dom'
 import { Layout } from './components/Layout'
+import { NoPermission } from './components/NoPermission'
 import { useSettings } from './lib/useSharedQueries'
-import { useSession } from './lib/useAccount'
+import { useSession, usePermissions } from './lib/useAccount'
+import { PERM, permissionForRoute } from './lib/permissions'
 import { Logo } from './components/Logo'
 import { ExtensionBoundary } from './extensions/ExtensionBoundary'
 import {
@@ -50,6 +52,7 @@ const CORE_ROUTE_PATHS = new Set([
   '/regime',
   '/settings',
   '/admin',
+  '/admin/permissions',
   '/dev',
   '/settings/keys',
   '/settings/ai',
@@ -72,7 +75,6 @@ function MiningRedirect() {
 
 // 首次使用守卫 —— 仅对「管理员」生效: 未完成向导则重定向到 /onboarding。
 // 向导内容(数据源/API Key)属于管理员初始化环境; 普通账号首次登录直接进看板。
-// 旧访问密码模式(无 /api/accounts 会话)下 me 为空, 行为与原先一致。
 // 只挂在根路由上;/onboarding 本身不被守卫,避免循环重定向。
 // settings 由 Layout 预取,守卫判定不产生额外请求。
 function OnboardingGuard({ children }: { children: React.ReactNode }) {
@@ -101,9 +103,9 @@ function OnboardingGuard({ children }: { children: React.ReactNode }) {
   }
 
   // 非管理员: 直接放行进看板, 不展示数据源配置向导
-  if (session.user && session.user.role !== 'admin') return <>{children}</>
+  if (!session.isAdmin) return <>{children}</>
 
-  // 管理员(含旧访问密码模式)且未完成首次配置: 进向导
+  // 管理员且未完成首次配置: 进向导
   if (settings.data && settings.data.onboarding_completed === false) {
     return <Navigate to="/onboarding" replace />
   }
@@ -118,9 +120,9 @@ function SettingsRedirect() {
   return <Navigate to={`/admin${search ? `?${search}` : ''}`} replace />
 }
 
-// 管理后台守卫 — 先校验登录态, 再校验管理员角色。
-// 未登录(账号会话与旧密码会话都没有)直接去登录页, 不允许看到后台界面;
-// 已登录但非 admin 的邮箱账号退回看板。旧访问密码模式登录后仍视为管理员。
+// 管理后台守卫 — 先校验登录态, 再校验 admin.access。
+// 未登录(无邮箱账号会话)直接去登录页;
+// 已登录但没有后台权限的账号展示「无权限」态, 不静默跳走。
 export function AdminGuard({ children }: { children: React.ReactNode }) {
   const session = useSession()
   const location = useLocation()
@@ -135,7 +137,28 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     const redirect = `${location.pathname}${location.search}`
     return <Navigate to={`/login?redirect=${encodeURIComponent(redirect)}`} replace />
   }
-  if (!session.isAdmin) return <Navigate to="/" replace />
+  if (!session.isAdmin) return <NoPermission title="无后台管理权限" />
+  return <>{children}</>
+}
+
+/**
+ * 页面级权限守卫（前台路由，登录态由 Layout 的 OnboardingGuard 保证）。
+ * 没有对应权限码时渲染「无权限」页，而不是把用户踢回看板。
+ * `anyOf` 用于「持有任一权限即可」的场景（如用户与权限分区）。
+ */
+function PermissionGate({
+  perm,
+  anyOf,
+  children,
+}: {
+  perm?: string
+  anyOf?: readonly string[]
+  children: React.ReactNode
+}) {
+  const { loading, can, canAny } = usePermissions()
+  if (loading) return <RouteFallback />
+  const allowed = anyOf ? canAny([...anyOf]) : perm ? can(perm) : true
+  if (!allowed) return <NoPermission />
   return <>{children}</>
 }
 
@@ -180,9 +203,11 @@ export const router = createBrowserRouter([
     path: '/admin',
     element: (
       <AdminGuard>
-        <Suspense fallback={<RouteFallback />}>
-          <AdminApp />
-        </Suspense>
+        <PermissionGate perm={PERM.settingsWrite}>
+          <Suspense fallback={<RouteFallback />}>
+            <AdminApp />
+          </Suspense>
+        </PermissionGate>
       </AdminGuard>
     ),
   },
@@ -190,9 +215,11 @@ export const router = createBrowserRouter([
     path: '/admin/data',
     element: (
       <AdminGuard>
-        <Suspense fallback={<RouteFallback />}>
-          <AdminApp section="data" />
-        </Suspense>
+        <PermissionGate perm={PERM.dataManage}>
+          <Suspense fallback={<RouteFallback />}>
+            <AdminApp section="data" />
+          </Suspense>
+        </PermissionGate>
       </AdminGuard>
     ),
   },
@@ -200,9 +227,23 @@ export const router = createBrowserRouter([
     path: '/admin/prompts',
     element: (
       <AdminGuard>
-        <Suspense fallback={<RouteFallback />}>
-          <AdminApp section="prompts" />
-        </Suspense>
+        <PermissionGate perm={PERM.promptsManage}>
+          <Suspense fallback={<RouteFallback />}>
+            <AdminApp section="prompts" />
+          </Suspense>
+        </PermissionGate>
+      </AdminGuard>
+    ),
+  },
+  {
+    path: '/admin/permissions',
+    element: (
+      <AdminGuard>
+        <PermissionGate anyOf={[PERM.usersManage, PERM.rolesManage]}>
+          <Suspense fallback={<RouteFallback />}>
+            <AdminApp section="permissions" />
+          </Suspense>
+        </PermissionGate>
       </AdminGuard>
     ),
   },
@@ -230,22 +271,29 @@ export const router = createBrowserRouter([
       </OnboardingGuard>
     ),
     children: [
-      { index: true, element: <Dashboard /> },
+      { index: true, element: <PermissionGate perm={PERM.dashboard}><Dashboard /></PermissionGate> },
       { path: 'overview', element: <Navigate to="/" replace /> },
-      { path: 'analysis', element: <Navigate to="/admin?tab=pages&section=ext-pages" replace /> },
-      { path: 'analysis/:menuId', element: <AnalysisDetail /> },
-      { path: 'watchlist', element: <Watchlist /> },
-      { path: 'screener', element: <Screener /> },
-      { path: 'backtest', element: <Backtest /> },
-      { path: 'factors', element: <Factors /> },
-      { path: 'growth', element: <Growth /> },
-      { path: 'stock-analysis', element: <StockAnalysis /> },
+      {
+        path: 'analysis',
+        element: (
+          <PermissionGate perm={PERM.pagesManage}>
+            <Navigate to="/admin?tab=pages&section=ext-pages" replace />
+          </PermissionGate>
+        ),
+      },
+      { path: 'analysis/:menuId', element: <PermissionGate perm={PERM.analysis}><AnalysisDetail /></PermissionGate> },
+      { path: 'watchlist', element: <PermissionGate perm={PERM.watchlist}><Watchlist /></PermissionGate> },
+      { path: 'screener', element: <PermissionGate perm={PERM.screener}><Screener /></PermissionGate> },
+      { path: 'backtest', element: <PermissionGate perm={PERM.backtest}><Backtest /></PermissionGate> },
+      { path: 'factors', element: <PermissionGate perm={PERM.factors}><Factors /></PermissionGate> },
+      { path: 'growth', element: <PermissionGate perm={PERM.growth}><Growth /></PermissionGate> },
+      { path: 'stock-analysis', element: <PermissionGate perm={PERM.stockAnalysis}><StockAnalysis /></PermissionGate> },
       { path: 'mining', element: <MiningRedirect /> },
-      { path: 'indices', element: <Indices /> },
-    { path: 'regime', element: <Regime /> },
+      { path: 'indices', element: <PermissionGate perm={PERM.indices}><Indices /></PermissionGate> },
+      { path: 'regime', element: <PermissionGate perm={PERM.regime}><Regime /></PermissionGate> },
       { path: 'account', element: <Suspense fallback={<RouteFallback />}><PersonalSettings /></Suspense> },
-      // 隐藏路由：开发者工具（不暴露在菜单，仅供调试）
-      { path: 'dev', element: <AdminGuard><Dev /></AdminGuard> },
+      // 隐藏路由：开发者工具（不暴露在菜单，权限码 page.dev）
+      { path: 'dev', element: <PermissionGate perm={PERM.dev}><Dev /></PermissionGate> },
       // 旧路由兼容重定向
       { path: 'settings/keys', element: <Navigate to="/admin?tab=data-sources" replace /> },
       { path: 'settings/ai', element: <Navigate to="/admin?tab=ai" replace /> },
@@ -255,9 +303,11 @@ export const router = createBrowserRouter([
         return {
           path: route.path.slice(1),
           element: (
-            <ExtensionBoundary extensionId={route.extensionId}>
-              <ExtensionPage />
-            </ExtensionBoundary>
+            <PermissionGate perm={permissionForRoute(route.path) ?? PERM.analysis}>
+              <ExtensionBoundary extensionId={route.extensionId}>
+                <ExtensionPage />
+              </ExtensionBoundary>
+            </PermissionGate>
           ),
         }
       }),

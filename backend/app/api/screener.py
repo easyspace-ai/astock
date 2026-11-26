@@ -29,7 +29,7 @@ router = APIRouter(prefix="/api/screener", tags=["screener"])
 
 
 def _admit_submission(request: Request) -> None:
-    from app.api.auth import COOKIE_NAME
+    from app.api.accounts import COOKIE_NAME
     from app.services.workload import admit_request
 
     admit_request(request, COOKIE_NAME)

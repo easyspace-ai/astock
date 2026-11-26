@@ -11,15 +11,16 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from app.api import ext_pages
-from app.api.permissions import require_admin
+from app.api.permissions import require_permission
 from app.api.definitions import _uploads
 from app.custom.source_packages.routes import read_upload, require_management
 from app.extensions.packages import ExtensionPackageStore
-from app.services import import_center
+from app.services import import_center, rbac
 from app.services.ext_pages import PagePackStore
 from app.services.package_archive import read_code_archive
 
-router = APIRouter(prefix="/api", tags=["import-center"], dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/api", tags=["import-center"],
+    dependencies=[Depends(require_permission(rbac.ADMIN_PAGES_MANAGE))])
 _MANAGE = [Depends(require_management)]
 
 

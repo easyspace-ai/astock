@@ -4,6 +4,8 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, Command, Search } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { usePermissions } from '@/lib/useAccount'
+import { PERM } from '@/lib/permissions'
 import { cn } from '@/lib/cn'
 
 /**
@@ -19,6 +21,8 @@ export function GlobalSearch() {
   const [active, setActive] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
+  // 这个入口唯一动作是跳「个股分析」; 没有该页面权限时不出现, 避免搜出进不去的页面
+  const { can } = usePermissions()
 
   // ⌘K / Ctrl+K 全局唤起；Esc 关闭交给面板自己处理
   useEffect(() => {
@@ -76,6 +80,8 @@ export function GlobalSearch() {
       go(picked.symbol)
     }
   }
+
+  if (!can(PERM.stockAnalysis)) return null
 
   return (
     <>

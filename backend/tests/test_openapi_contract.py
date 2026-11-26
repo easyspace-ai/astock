@@ -37,6 +37,9 @@ EXPECTED_OPEN_ENDPOINTS: set[str] = {
     "GET /api/ext-data/{config_id}/dimension-members",
     "GET /api/index/daily",
     "GET /api/index/minute",
+    # 新闻中心只读面: 与行情同属 read:market, 供二开资讯聚合使用
+    "GET /api/info/news",
+    "GET /api/info/news/{event_id}",
     "GET /api/intraday/indices",
     "GET /api/intraday/status",
     "GET /api/kline/daily",

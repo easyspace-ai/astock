@@ -1,7 +1,7 @@
 """虚拟账户 API 契约测试 — 成功/无数据/错误响应 (per CONTRIBUTING API 契约矩阵)。
 
 镜像 test_alerts_query_bounds.py: 只挂本路由的裸 FastAPI app, 不经过主应用
-全局中间件 (访问密码门是部署层关注点, 不属于本契约)。
+全局中间件 (认证门是部署层关注点, 不属于本契约)。
 """
 from __future__ import annotations
 

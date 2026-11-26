@@ -14,7 +14,7 @@
 
 安全:
   - 密码经 PBKDF2 哈希存储（见 services/user_store.py），不落明文。
-  - 登录限流：同 IP 连续失败 5 次锁 5 分钟（内存计数，与面板密码体系一致）。
+  - 登录限流：同 IP 连续失败 5 次锁 5 分钟（内存计数）。
   - 会话 token 通过 HttpOnly cookie 下发（SESSION_TTL=30 天）。
   - 验证码 6 位数字、15 分钟有效、单次使用；发送接口按用户/IP 限流。
   - 忘记密码接口统一返回成功，避免邮箱枚举。
@@ -186,7 +186,7 @@ def register(body: RegisterRequest, response: Response, request: Request) -> dic
     """邮箱注册。系统首个注册用户自动成为管理员；其余默认免费用户。
 
     安全: 首个账号 = 管理员, 只允许本机/内网注册, 防止公网陌生人抢先注册
-    拿下管理员权限 (与「首次设置访问密码」同一闸门)。
+    拿下管理员权限。
     """
     email = body.email.strip().lower()
     if not _EMAIL_RE.match(email):
@@ -219,6 +219,7 @@ def login(body: LoginRequest, response: Response, request: Request) -> dict:
         _record_fail(ip)
         raise HTTPException(status_code=401, detail="邮箱或密码错误")
     _record_success(ip)
+    user_store.touch_last_login(user["id"])
     token = user_store.create_session(user["id"])
     _set_session_cookie(response, token)
     return {"user": user_store.public_user(user)}

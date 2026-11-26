@@ -1,0 +1,1238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TSP · A股智能量化工作台 · 用户手册</title>
+<meta name="description" content="TSP（TickFlow）A股智能量化工作台用户手册：安装部署、首次使用、功能导览、监控通知、数据维护、备份迁移与排错指南。">
+<style>
+/* ============================================================
+   TSP 用户手册 · 静态文档站
+   维护说明：
+   1. 左侧导航条目与右侧章节通过 data-target / id 一一对应；
+      新增章节时，先在 <nav> 加条目，再在 <main> 加 <section>。
+   2. 每段内容用 <!-- ===== 章节：xxx ===== --> 注释分块，便于定位。
+   3. 本文件无外部依赖，可直接用浏览器打开，也可挂到任意静态服务器。
+   ============================================================ */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1c2128;
+  --muted: #5b6572;
+  --border: #e3e7ee;
+  --accent: #4f46e5;
+  --accent-soft: #eef2ff;
+  --code-bg: #f1f3f7;
+  --warn-bg: #fff7ed;
+  --warn-border: #fdba74;
+  --danger-bg: #fef2f2;
+  --danger-border: #f87171;
+  --tip-bg: #ecfdf5;
+  --tip-border: #34d399;
+  --shadow: 0 1px 3px rgba(15, 23, 42, .08);
+  --sidebar-w: 288px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --surface: #171a21;
+    --text: #e6e9ef;
+    --muted: #9aa4b2;
+    --border: #262b34;
+    --accent: #818cf8;
+    --accent-soft: #1e2235;
+    --code-bg: #1e222b;
+    --warn-bg: #2a1d10;
+    --warn-border: #b45309;
+    --danger-bg: #2a1414;
+    --danger-border: #b91c1c;
+    --tip-bg: #0f241c;
+    --tip-border: #059669;
+    --shadow: 0 1px 3px rgba(0, 0, 0, .4);
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  font-size: 15px;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- 布局 ---------- */
+.layout { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: 100vh; }
+
+/* ---------- 侧边栏 ---------- */
+.sidebar {
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  border-right: 1px solid var(--border); background: var(--surface);
+  padding: 20px 14px;
+}
+.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; padding: 0 6px; }
+.brand img { width: 30px; height: 30px; }
+.brand .name { font-weight: 700; font-size: 16px; }
+.brand .sub { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
+.search-box { margin: 0 6px 14px; }
+.search-box input {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font-size: 14px; outline: none;
+}
+.search-box input:focus { border-color: var(--accent); }
+.nav-group { margin: 14px 0 4px; }
+.nav-group-title {
+  font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em;
+  padding: 6px 10px;
+}
+.nav-item {
+  display: block; padding: 7px 10px; border-radius: 8px; color: var(--text);
+  font-size: 14px; cursor: pointer; border: none; background: none; width: 100%; text-align: left;
+}
+.nav-item:hover { background: var(--accent-soft); text-decoration: none; }
+.nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav-item.hidden { display: none; }
+
+/* ---------- 主内容 ---------- */
+.main { padding: 32px 40px 80px; max-width: 960px; }
+.section { display: none; }
+.section.active { display: block; animation: fadeIn .15s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+h1 { font-size: 28px; margin: 0 0 8px; }
+h2 { font-size: 21px; margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+h3 { font-size: 16px; margin: 22px 0 8px; }
+p { margin: 10px 0; }
+ul, ol { padding-left: 22px; }
+li { margin: 6px 0; }
+code {
+  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  background: var(--code-bg); padding: 2px 6px; border-radius: 5px; font-size: 13px;
+}
+pre {
+  background: var(--code-bg); padding: 14px 16px; border-radius: 10px; overflow-x: auto;
+  font-size: 13px; line-height: 1.6;
+}
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; }
+th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; vertical-align: top; }
+th { background: var(--accent-soft); }
+.callout { border: 1px solid; border-radius: 10px; padding: 12px 16px; margin: 16px 0; }
+.callout.tip { background: var(--tip-bg); border-color: var(--tip-border); }
+.callout.warn { background: var(--warn-bg); border-color: var(--warn-border); }
+.callout.danger { background: var(--danger-bg); border-color: var(--danger-border); }
+.callout .title { font-weight: 700; margin-bottom: 4px; }
+.muted { color: var(--muted); }
+.lead { font-size: 16px; color: var(--muted); }
+.toc-inline { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 22px; }
+.toc-inline ol { margin: 6px 0; }
+.footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+
+/* ---------- 移动端 ---------- */
+.menu-btn {
+  display: none; position: fixed; top: 14px; left: 14px; z-index: 30;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  width: 40px; height: 40px; font-size: 18px; cursor: pointer; color: var(--text);
+}
+@media (max-width: 960px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar {
+    position: fixed; z-index: 20; width: var(--sidebar-w); transform: translateX(-100%);
+    transition: transform .2s ease; height: 100vh;
+  }
+  .sidebar.open { transform: translateX(0); }
+  .menu-btn { display: block; }
+  .main { padding: 64px 20px 60px; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 15; display: none; }
+  .overlay.open { display: block; }
+}
+</style>
+</head>
+<body>
+<button class="menu-btn" id="menuBtn" aria-label="打开目录">☰</button>
+<div class="overlay" id="overlay"></div>
+<div class="layout">
+
+  <!-- ==================== 侧边导航 ==================== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="../brand/logo-dark-title.svg">
+        <img src="../brand/logo-title.svg" alt="TSP Logo">
+      </picture>
+      <div>
+        <span class="name">TSP 量化工作台</span>
+        <span class="sub">用户手册 · v0.1.87</span>
+      </div>
+    </div>
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="搜索章节…" autocomplete="off">
+    </div>
+    <nav id="nav">
+      <!-- 导航条目由下方分组维护；data-target 对应 main 中 section 的 id -->
+      <div class="nav-group">
+        <div class="nav-group-title">开始</div>
+        <button class="nav-item" data-target="intro">产品简介</button>
+        <button class="nav-item" data-target="quick-start">快速开始</button>
+        <button class="nav-item" data-target="first-run">首次初始化</button>
+        <button class="nav-item" data-target="workflow">推荐使用流程</button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-title">界面通用</div>
+        <button class="nav-item" data-target="ui-layout">菜单与布局</button>
+        <button class="nav-item" data-target="ui-date">日期口径</button>
+        <button class="nav-item" data-target="ui-detail">标的详情与搜索</button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-title">功能导览</div>
+        <button class="nav-item" data-target="dash">看板</button>
+        <button class="nav-item" data-target="watchlist">自选</button>
+        <button class="nav-item" data-target="strategy">策略</button>
+        <button class="nav-item" data-target="backtest">回测</button>
+        <button class="nav-item" data-target="factors">因子</button>
+        <button class="nav-item" data-target="signals">信号库与持仓提醒</button>
+        <button class="nav-item" data-target="stock-analysis">个股分析</button>
+        <button class="nav-item" data-target="ladder">连板梯队</button>
+        <button class="nav-item" data-target="concept-industry">概念与行业</button>
+        <button class="nav-item" data-target="financials">财务分析</button>
+        <button class="nav-item" data-target="monitor">监控中心</button>
+        <button class="nav-item" data-target="ai-review">AI 复盘</button>
+        <button class="nav-item" data-target="index">指数</button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-title">配置</div>
+        <button class="nav-item" data-target="data-source">数据源</button>
+        <button class="nav-item" data-target="ai-config">AI 设置</button>
+        <button class="nav-item" data-target="realtime">实时监控</button>
+        <button class="nav-item" data-target="notify">通知渠道</button>
+        <button class="nav-item" data-target="page-settings">页面与菜单</button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-title">数据维护</div>
+        <button class="nav-item" data-target="data-overview">数据画像与同步</button>
+        <button class="nav-item" data-target="data-integrity">自检与修补</button>
+        <button class="nav-item" data-target="data-extend">扩展历史与重算</button>
+        <button class="nav-item" data-target="data-ext">扩展数据接入</button>
+        <button class="nav-item" data-target="data-clear">清除数据</button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-title">账号与开放接口</div>
+        <button class="nav-item" data-target="accounts">账号与权限</button>
+        <button class="nav-item" data-target="open-api">API Token 与开放接口</button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-title">运维与备份</div>
+        <button class="nav-item" data-target="backup">数据目录与备份</button>
+        <button class="nav-item" data-target="migrate">数据迁移</button>
+        <button class="nav-item" data-target="upgrade">更新与维护</button>
+        <button class="nav-item" data-target="ops-health">健康检查与可观测</button>
+        <button class="nav-item" data-target="security">安全建议</button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-title">附录</div>
+        <button class="nav-item" data-target="faq">常见问题与排错</button>
+        <button class="nav-item" data-target="glossary">术语表</button>
+      </div>
+    </nav>
+  </aside>
+
+  <!-- ==================== 主内容 ==================== -->
+  <main class="main" id="main">
+    <!-- 章节内容在下方按 id 组织；新增章节请同步左侧导航 -->
+    <!-- ===== 章节：intro ===== -->
+    <section class="section" id="intro">
+      <h1>TSP · A股智能量化工作台</h1>
+      <p class="lead">一套本地优先的 A 股数据分析与策略研究工具：行情管理、自选、策略筛选、回测、因子、个股/概念/行业/财务分析、盘中监控与 AI 复盘。</p>
+
+      <h2>主要能力</h2>
+      <ul>
+        <li><strong>行情数据</strong>：A 股、ETF、指数的日 K 与分钟 K 管理，除权因子与 Enriched 指标计算。</li>
+        <li><strong>策略研究</strong>：内置策略、自定义策略、AI 生成策略；批量筛选与单策略查看，相同输入复用计算结果。</li>
+        <li><strong>回测验证</strong>：策略回测、参数优化、步进优化（Walk-Forward），样本内/样本外对照。</li>
+        <li><strong>因子平台</strong>：因子检验、因子库、自定义因子编辑器、因子组合与因子挖掘。</li>
+        <li><strong>市场观察</strong>：看板、连板梯队、概念/行业分析、主线排行与情绪周期。</li>
+        <li><strong>监控通知</strong>：策略、价格、涨跌、个股信号与市场异动规则；飞书、企业微信、自定义 Webhook 推送。</li>
+        <li><strong>AI 辅助</strong>：个股四维分析、财务分析、盘后复盘；支持任意 OpenAI 兼容接口或本地模型。</li>
+        <li><strong>开放扩展</strong>：API Token + scope 权限、SSE 事件流、MCP 接入；数据源插件化与扩展页面。</li>
+      </ul>
+
+      <div class="callout warn">
+        <div class="title">风险提示</div>
+        本项目用于数据分析和策略研究，<strong>不构成任何投资建议</strong>。历史表现不代表未来收益，实盘决策及其风险由使用者自行承担。策略结果是研究结果，不等同于实盘委托或成交记录。
+      </div>
+
+      <h2>使用前须知</h2>
+      <ol>
+        <li>页面是否显示某项功能，取决于当前版本、数据源能力检测结果及本地是否已有对应数据。</li>
+        <li>分钟 K、五档盘口、财务数据等功能需要相应数据权限（能力键）。</li>
+        <li>第一次运行后必须先同步基础数据，否则策略、分析和回测页面可能没有结果。</li>
+        <li>AI 功能需要单独配置兼容的模型服务或 Codex CLI。</li>
+      </ol>
+    </section>
+
+    <!-- ===== 章节：quick-start ===== -->
+    <section class="section" id="quick-start">
+      <h1>快速开始</h1>
+      <p class="lead">提供四种运行方式，按你的场景选择；零基础用户也可以让本机 AI 编程助手按 README 中的提示词代为部署。</p>
+
+      <h2>环境要求</h2>
+      <table>
+        <tr><th>方式</th><th>前置依赖</th><th>说明</th></tr>
+        <tr><td>Docker 镜像 / Compose</td><td>Docker + Docker Compose</td><td>无需本地 Python / Node，推荐多数用户</td></tr>
+        <tr><td>源码 Dev 模式</td><td>Python ≥ 3.11、Node ≥ 20、<code>uv</code>、<code>pnpm</code>、Git</td><td>二次开发与随时 <code>git pull</code> 更新</td></tr>
+        <tr><td>桌面客户端</td><td>Windows / macOS 安装包</td><td>免命令行，数据沿用安装目录下的 <code>data/</code></td></tr>
+      </table>
+
+      <h2>方式 A：GHCR 现成镜像（免本地构建）</h2>
+      <pre><code>docker run -d --name tsp -p 3018:3018 \
+  -e DATA_DIR=/app/data -v "${PWD}/data:/app/data" \
+  ghcr.io/shy3130/tick-stock-panel:latest
+# 打开 http://localhost:3018</code></pre>
+      <ul>
+        <li>需要配置时：从 <code>.env.example</code> 复制出 <code>.env</code>，命令追加 <code>--env-file .env</code>，并保留 <code>DATA_DIR</code> 与数据挂载。</li>
+        <li>自定义数据源跑在宿主机、容器内需通过 <code>host.docker.internal</code> 访问时，Linux 下加 <code>--add-host=host.docker.internal:host-gateway</code>。</li>
+        <li>现成镜像默认不含老 CPU 兼容内核与 vectorbt 回测依赖；有这些需求请用方式 B 自构建。</li>
+      </ul>
+
+      <h2>方式 B：Docker Compose（本地构建，全套挂载）</h2>
+      <pre><code>cp .env.example .env
+docker compose up --build
+# 后台运行：docker compose up --build -d
+# 查看日志：docker compose logs -f</code></pre>
+      <p>前端产物拷入后端镜像，单容器运行；<code>/app/data</code> 必须映射到宿主机持久化目录，不要只留在容器可写层。</p>
+
+      <h2>方式 C：源码 Dev 模式（二次开发推荐）</h2>
+      <pre><code>git clone https://github.com/shy3130/tick-stock-panel.git
+cd tick-stock-panel
+cp .env.example .env       # 按需填 TICKFLOW_API_KEY（留空 = None 模式）
+./dev.sh                   # Windows: .\dev.ps1</code></pre>
+      <ul>
+        <li>默认：后端 <code>http://localhost:3018</code>，前端 <code>http://localhost:3011</code>。</li>
+        <li>自定义端口：<code>BACKEND_PORT=8000 FRONTEND_PORT=5173 ./dev.sh</code>。</li>
+        <li>手动分别启动：后端 <code>cd backend &amp;&amp; uv sync --extra backtest &amp;&amp; uv run uvicorn app.main:app --reload --port 3018</code>；前端 <code>cd frontend &amp;&amp; pnpm install &amp;&amp; pnpm dev</code>。</li>
+      </ul>
+
+      <h2>老 CPU 兼容（无 AVX2/FMA）</h2>
+      <p>运行时报 <code>avx2</code>/<code>fma</code> 缺失或进程 <code>exit 132</code>，在根目录 <code>.env</code> 设置：</p>
+      <pre><code>BACKEND_EXTRAS=legacy-cpu          # 兼容老 CPU
+BACKEND_EXTRAS=legacy-cpu backtest # 兼容老 CPU + 回测依赖</code></pre>
+      <p>不要设置 <code>POLARS_SKIP_CPU_CHECK</code>——它只会隐藏警告，实际执行不支持的指令时仍可能崩溃。</p>
+
+      <div class="callout tip">
+        <div class="title">停止服务</div>
+        Dev 模式在启动终端按 <code>Ctrl+C</code>；Docker 模式执行 <code>docker compose down</code>。执行带卷删除参数的命令前，先确认数据已备份。
+      </div>
+    </section>
+
+    <!-- ===== 章节：first-run ===== -->
+    <section class="section" id="first-run">
+      <h1>首次初始化</h1>
+
+      <h2>首次配置向导</h2>
+      <p>首次打开页面时，系统依次引导：声明 → 欢迎 → TickFlow Key（可跳过）→ 能力探测 → 完成。跳过 Key 后仍可进入系统，但依赖 TickFlow 的数据能力会受限，之后可在「设置 → TickFlow」补充。</p>
+
+      <h2>注册管理员账号</h2>
+      <p>公网或多人可访问的部署必须先注册管理员。<strong>首个注册账号自动成为超级管理员</strong>，其注册入口仅在本机或可信内网可用，防止公网陌生人抢先注册锁死面板。已有账号后，新增账号、改密码与权限分配都在「管理后台 → 用户与权限」完成。</p>
+
+      <h3>方式一：环境变量预置管理员（适合 Docker / 自动化部署）</h3>
+      <p>在 <code>.env</code>（或系统环境变量）同时设置：</p>
+      <pre><code>ADMIN_EMAIL='admin@example.com'
+ADMIN_PASSWORD='至少 6 位的密码'</code></pre>
+      <ul>
+        <li>仅在系统还没有任何邮箱账号时创建首个超级管理员；已有账号不会被覆盖。</li>
+        <li>两个变量必须同时填写，缺一不创建；落库的是 PBKDF2 哈希，明文只存在于 <code>.env</code>。</li>
+        <li><code>.env</code> 权限保持 600，不要提交到 Git。</li>
+      </ul>
+
+      <h3>方式二：SSH 端口转发（不改配置）</h3>
+      <p>在<strong>自己电脑</strong>的终端执行（不是服务器上）：</p>
+      <pre><code>ssh -L 3018:127.0.0.1:3018 用户名@服务器IP
+# 例：ssh -L 3018:127.0.0.1:3018 root@123.45.67.89</code></pre>
+      <p>保持 SSH 连接不关，在本机浏览器打开 <code>http://127.0.0.1:3018</code>，此时后端看到的客户端 IP 是 <code>127.0.0.1</code>，可正常显示注册界面。注册完成后即可断开 SSH，之后用公网地址 + 邮箱账号登录。</p>
+
+      <div class="callout warn">
+        <div class="title">反向代理注意</div>
+        若面板在 Nginx 等反代之后，需正确配置 <code>X-Forwarded-For</code> 头，后端据此取真实客户端 IP（仅当直连 peer 是本机/内网时才采信该头，防伪造绕过）。
+      </div>
+
+      <h2>首次同步数据</h2>
+      <p>进入主界面后，优先打开「数据」页点击「立即同步」，建议至少准备：</p>
+      <ol>
+        <li>个股维表（代码、名称、市场、行业、股本等基础属性）</li>
+        <li>A 股日 K</li>
+        <li>除权因子</li>
+        <li>Enriched 策略分析表</li>
+      </ol>
+      <p>需要 ETF、指数、分钟 K 或财务分析时，再同步对应数据。同步任务应等待完成后再进入策略或回测页面；任务失败时查看任务记录与后端日志，不要连续重复提交相同任务。</p>
+    </section>
+
+    <!-- ===== 章节：workflow ===== -->
+    <section class="section" id="workflow">
+      <h1>推荐使用流程</h1>
+      <p>新用户建议按以下顺序上手：</p>
+      <ol>
+        <li>在「设置 → TickFlow」保存 Key，并执行「重新检测」。</li>
+        <li>在「数据」页同步个股维表、日 K、除权因子和 Enriched 数据。</li>
+        <li>在「自选」页添加关注标的，熟悉行情和详情对话框。</li>
+        <li>在「策略」页先运行内置策略，确认本地数据链路正常。</li>
+        <li>在「回测」页验证策略历史表现和交易时序；研究自定义因子时在「因子」页编写公式并检验。</li>
+        <li>在「设置 → 实时监控」配置实时刷新、飞书或企业微信。</li>
+        <li>在「监控中心」创建规则并观察触发记录。</li>
+        <li>配置 AI 后，再使用个股分析、财务分析和 AI 复盘。</li>
+        <li>定期备份 <code>data/</code> 与 <code>.env</code>。</li>
+      </ol>
+    </section>
+
+    <!-- ===== 章节：ui-layout ===== -->
+    <section class="section" id="ui-layout">
+      <h1>菜单与布局</h1>
+      <p>左侧菜单用于切换看板、自选、策略、因子、回测、个股与板块分析、监控、复盘、信号库、持仓提醒、指数、数据和设置等页面。</p>
+      <ul>
+        <li>菜单显示与顺序可在「设置 → 菜单设置」调整。</li>
+        <li>动态扩展分析页面也会出现在左侧菜单，内容来自「扩展页面」配置。</li>
+        <li>浅色/深色主题通过侧栏底部按钮切换；主题同时保存在本地缓存和后端偏好中，重启、端口变化或登录后恢复上次选择。</li>
+      </ul>
+    </section>
+
+    <!-- ===== 章节：ui-date ===== -->
+    <section class="section" id="ui-date">
+      <h1>日期口径</h1>
+      <p>策略、分析和连板梯队等页面通常按交易日期展示数据：</p>
+      <ul>
+        <li>最新日期不一定是自然日当天，休市日会回退到最近交易日。</li>
+        <li>当日数据未完成同步时，结果可能为空或不完整。</li>
+        <li>切换日期后，应等待页面重新加载对应交易日的数据。</li>
+        <li>所有业务日期口径为北京时间（UTC+8）。</li>
+      </ul>
+    </section>
+
+    <!-- ===== 章节：ui-detail ===== -->
+    <section class="section" id="ui-detail">
+      <h1>标的详情与搜索</h1>
+      <h2>个股详情对话框</h2>
+      <p>在自选、策略、监控记录、连板梯队和成分股列表中点击股票，通常会打开统一的个股详情对话框，可查看日 K、分时、成交量、量比及其他可用指标。</p>
+      <ul>
+        <li>成交量对比可按前 1–20 个交易日设置；大于 1 日时使用对应交易日的平均成交量，不按自然日计算。</li>
+        <li>关闭量比开关或缩小图表密度后，辅助标注会按界面规则隐藏。</li>
+      </ul>
+      <h2>概念与行业标签</h2>
+      <p>点击页面中的概念或行业标签，会打开统一的成分股对话框，可查看板块成分并继续打开个股详情。弹窗只负责展示和导航，不改变原页面的筛选状态。</p>
+      <h2>搜索、筛选与排序</h2>
+      <ul>
+        <li>搜索一般支持代码、名称或关键词。</li>
+        <li>多个筛选条件可能同时生效，结果异常少时先清除筛选。</li>
+        <li>点击表头或排序控件可切换升序、降序。</li>
+        <li>页面刷新后是否保留筛选，取决于对应页面的配置保存方式。</li>
+      </ul>
+    </section>
+
+    <!-- ===== 章节：dash ===== -->
+    <section class="section" id="dash">
+      <h1>看板</h1>
+      <p>看板集中查看市场摘要、监控通知和常用分析入口。</p>
+      <h2>主要内容</h2>
+      <ul>
+        <li>市场与指数概览；自选或关注标的摘要。</li>
+        <li>监控通知列表；常用功能入口和业务状态。</li>
+      </ul>
+      <h2>监控通知操作</h2>
+      <p>点击通知中的股票名称或代码，直接打开个股详情对话框；需要管理规则或查看完整触发历史时，进入「监控中心」。</p>
+      <h2>数据不刷新时的排查顺序</h2>
+      <ol>
+        <li>数据页是否已完成同步。</li>
+        <li>「设置 → 实时监控」是否开启实时行情。</li>
+        <li>当前是否处于交易时段。</li>
+        <li>TickFlow 能力检测是否包含对应行情权限。</li>
+      </ol>
+    </section>
+
+    <!-- ===== 章节：watchlist ===== -->
+    <section class="section" id="watchlist">
+      <h1>自选</h1>
+      <p>自选页维护个人关注标的，快速查看行情、日 K、分时和常用指标。</p>
+      <h2>添加标的</h2>
+      <ol>
+        <li>打开「自选」，使用搜索框输入股票或 ETF 的代码、名称。</li>
+        <li>从结果中选择标的并添加。</li>
+      </ol>
+      <p>也可用截图 OCR 导入识别截图中的股票，确认识别结果后批量加入；OCR 受图片清晰度影响，提交前应检查代码和名称。</p>
+      <h2>查看方式</h2>
+      <ul>
+        <li><strong>表格视图</strong>：适合排序、筛选和对比多个字段。</li>
+        <li><strong>卡片视图</strong>：适合快速查看单个标的摘要。</li>
+        <li><strong>自定义列</strong>：选择需要展示的基础指标、日 K 或分时列。</li>
+      </ul>
+      <h2>筛选、排序与列表管理</h2>
+      <ul>
+        <li>可按板块和数值条件过滤，按指定字段排序；结果为空时先检查是否多条件叠加。</li>
+        <li>支持置顶、移除、清空自选列表。清空是批量删除操作，执行前需确认；清空自选不会删除行情或策略数据。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="title">实时与分时限制</div>
+        Free 能力下仅自选列表前 5 个标的进入实时监控范围；分时列通常需要 Pro+ 分钟数据能力；有分钟权限不等于页面自动刷新，还需在「设置 → 实时监控」开启对应开关。
+      </div>
+    </section>
+
+    <!-- ===== 章节：strategy ===== -->
+    <section class="section" id="strategy">
+      <h1>策略</h1>
+      <p>策略页运行和管理策略，查看指定交易日的候选标的及评分。</p>
+
+      <h2>股票与 ETF</h2>
+      <p>页面顶部可切换股票和 ETF，两类策略池相互独立；切换到 ETF 只展示适用 ETF 的策略，当前资产类型会影响数据范围、可用策略及结果。</p>
+
+      <h2>策略卡片与结果</h2>
+      <ul>
+        <li>卡片展示策略名称、状态、结果数量和监控状态；列表先加载摘要，点击卡片再按需加载明细。</li>
+        <li>常用操作：查看结果、切换交易日期、调整参数后重算、开关监控、编辑/复制/删除允许管理的用户策略。</li>
+        <li>监控开关只控制监控行为，不应改变策略结果或结果数量。</li>
+        <li>选择「全部」可查看多策略合并结果；同一股票可能被多个策略命中，应结合策略名称、评分和命中原因判断。</li>
+      </ul>
+      <p>结果表格支持按评分/涨跌幅排序、基础指标与策略字段筛选、调整列配置、查看详情、加入自选。评分是策略定义的一部分；自定义评分字段若未落表，系统在执行时基于可用字段临时计算；评分仍为空时，检查表达式所需字段是否存在、字段名是否正确、当日数据是否完整。</p>
+
+      <h2>参数调整</h2>
+      <ul>
+        <li><strong>基础参数</strong>：系统通用的市值、价格、交易状态等过滤条件。</li>
+        <li><strong>策略参数</strong>：具体策略定义的阈值、窗口和信号参数。</li>
+      </ul>
+      <p>修改后需重新运行或触发重算；历史已保存结果不会因修改当前参数而自动改写，除非主动对对应日期重新计算。</p>
+
+      <h2>创建策略</h2>
+      <p>点击「创建策略」可选择 <strong>AI 创建</strong>（描述目标，由 AI 生成符合规范的策略）或 <strong>自定义代码</strong>（按模板编写逻辑、参数、评分及元数据）。创建前建议明确：适用资产类型、策略条件、评分标准与排序方向、可调参数及默认值、所需数据字段。</p>
+      <p>自定义策略默认目录：</p>
+      <pre><code>data/strategies/custom/
+data/strategies/ai/</code></pre>
+      <p>页面删除用户策略会删除对应文件并更新列表，无需进入容器手工删除；内置策略受保护。删除前确认策略是否仍被监控规则、回测配置或其他功能引用。策略数量较多时，可在「设置 → 系统设置」关闭“进入策略页自动运行”，按需点击卡片。</p>
+    </section>
+
+    <!-- ===== 章节：backtest ===== -->
+    <section class="section" id="backtest">
+      <h1>回测</h1>
+      <p>回测页包含「策略」和「验证」两个视图：策略视图做策略回测，验证视图提供参数优化与步进优化。开始前确保回测区间内的数据已同步完整。</p>
+
+      <h2>策略回测</h2>
+      <p>把策略信号转换为持仓和交易记录，评估完整交易过程。基础配置包括：策略与资产类型、股票池、起止日期、基础过滤条件、策略参数。</p>
+
+      <h3>成交时序</h3>
+      <ul>
+        <li>建仓和清仓分别选择成交口径；日线数据无法证明信号发生后的日内准确成交价，通常使用下一可成交时点、当日收盘或次日开盘等明确口径。</li>
+        <li>开启分钟成交后，如策略支持卖出信号，可选择信号触发后的下一分钟开盘成交：信号在当前分钟确认后，使用下一根分钟 K 开盘价模拟，避免未来函数。</li>
+        <li>分钟成交需要：Pro+ 或等效分钟能力、区间内完整分钟 K、标的已纳入分钟数据获取范围。未开启时仍按日线口径运行。</li>
+      </ul>
+
+      <h3>交易约束</h3>
+      <p>T+1、佣金、印花税、滑点、最大持仓数量、总敞口、仓位分配方式、止损规则、最大持有期。</p>
+
+      <h3>结果解读</h3>
+      <ul>
+        <li>净值曲线、总收益与年化、夏普/索提诺比率、最大回撤、胜率与盈亏比。</li>
+        <li>蒙卡回撤（中位 / 95% 边界）：把已完成交易按不同顺序重放 1000 次，估计仅因成交顺序运气能有多坏；资金管理按 95% 边界准备。</li>
+        <li>交易记录和持仓变化；评分引用因子时出现「因子归因」标签页，对比盈利单与亏损单入场信号日的因子均值。</li>
+      </ul>
+      <div class="callout tip">
+        <div class="title">口径说明</div>
+        策略结果表示某个交易日“哪些股票被选中”；回测记录还叠加成交时序、资金、持仓上限、T+1、费用、止损和卖出规则。两者数量或日期不完全一致，不代表使用了两套策略逻辑。
+      </div>
+
+      <h2>参数优化（Beta）</h2>
+      <ol>
+        <li>选择策略、资产类型和回测区间。</li>
+        <li>选择优化目标与优化模式。</li>
+        <li>勾选扫描参数，设置范围、步长或候选值。</li>
+        <li>启动任务，查看每组参数结果；任务由独立 worker 执行，可取消并在页面恢复状态。</li>
+      </ol>
+      <p>参数组合数量随维度快速增长，应从少量参数和较小范围开始；不要把历史区间最优参数直接视为未来最优，需结合样本外验证和稳定性判断。</p>
+
+      <h2>步进优化（Beta · Walk-Forward）</h2>
+      <p>检验参数在滚动样本外区间的稳定性：训练天数（每折选参数的历史长度）、测试天数（相邻样本外验证长度）、步进天数（下一折前移长度）。每折在训练区间优化参数，再用于相邻测试区间。重点关注 OOS 复利表现、IS→OOS 收益退化、各折参数与收益方向一致性、有效折数量。回测区间太短无法覆盖训练+测试窗口时任务会失败，需延长总区间或缩短窗口。</p>
+    </section>
+
+    <!-- ===== 章节：factors ===== -->
+    <section class="section" id="factors">
+      <h1>因子</h1>
+      <p>因子页包含五个 tab：检验、因子库、编辑器、组合、挖掘。研究线的自定义因子在这里创建、检验和管理，并与策略线联动。</p>
+
+      <h2>检验</h2>
+      <p>评估单个因子在历史截面上的区分能力。配置：因子、股票/ETF、起止日期、分组数量、等权或因子加权、佣金等成本参数。结果包括 IC（因子与未来收益相关性）、IC 胜率、分层收益、多空表现。服务端提供 Newey-West 稳健 t 值与 BH-FDR 多重校正 q 值；回测前必须确认因子方向（值越大越好 / 越小越好）。检验页还提供「自动挖掘」入口，按三档门槛全量统计筛选达标因子池。</p>
+
+      <h2>因子库</h2>
+      <ul>
+        <li>内置因子按动量、波动率、量价、收益形态等分组；自定义与复合因子统一管理。</li>
+        <li>状态机：草稿 / 激活 / 观察 / 退役；编辑器保存为草稿态，检验通过后手动激活。</li>
+        <li>修改公式保存为新版本并回草稿态；仅改名称、分组等元数据不影响状态。</li>
+        <li>因子详情可跳转检验，或「生成策略」一键产出单因子排名策略。</li>
+      </ul>
+
+      <h2>编辑器</h2>
+      <p>用 DSL 公式编写自定义因子，例如 <code>rank(-ts_sum(change_pct, 5))</code>。工作流：写公式 → 校验语法 → 试算 40 日 IC → 保存草稿。算子面板按时序/截面/工具分组，字段双语显示；校验错误可定位到出错字符附近，通过后显示依赖列与预热天数。公式修改保存为新版本并回草稿态，需重新检验后激活。</p>
+
+      <h2>组合与挖掘</h2>
+      <ul>
+        <li><strong>组合</strong>：多个因子按权重合成复合因子，与策略评分共用同一条物化路径，检验口径与单因子一致。</li>
+        <li><strong>挖掘</strong>：嵌套样本外因子与策略挖掘，训练区间因子方向重估、相关性去重、多因子排名组合搜索，自有策略作对照轨；候选入库后需显式确认才发布，永不自动上线。</li>
+      </ul>
+
+      <h2>因子与策略联动</h2>
+      <ul>
+        <li>策略触发器 → 因子：触发器编辑里点 Zap 按钮，从因子创建条件信号。</li>
+        <li>因子 → 策略：因子库「生成策略」一键生成单因子排名策略，保存后可直接回测。</li>
+        <li>AI → 因子：AI 生成提示词包含全部因子分组，可直接写因子条件。</li>
+        <li>回测 → 因子：评分引用因子的回测，结果区提供「因子归因」tab。</li>
+      </ul>
+    </section>
+
+    <!-- ===== 章节：signals ===== -->
+    <section class="section" id="signals">
+      <h1>信号库与持仓提醒</h1>
+      <h2>信号库</h2>
+      <p>信号库独立管理内置预计算信号与自定义条件信号，供策略触发器、回测和监控统一取用。</p>
+      <ul>
+        <li>内置信号只读，保证系统规则稳定。</li>
+        <li>自定义信号由字段、运算符和值组成，启用后生成 <code>csg_*</code> 信号字段。</li>
+        <li>支持因子条件：从因子创建条件信号并给阈值建议值。</li>
+        <li>支持 AI 生成：按自然语言描述生成条件，可用因子分组自动注入提示词。</li>
+      </ul>
+      <div class="callout warn">编辑信号前确认字段的数据频率：日线字段不能准确替代分钟级触发条件。</div>
+
+      <h2>持仓提醒</h2>
+      <p>持仓提醒页记录个股/ETF 的买入批次（价格、数量、日期），按批次自动生成止盈止损与到期监控规则，无需在监控中心逐条配置。</p>
+    </section>
+
+    <!-- ===== 章节：stock-analysis ===== -->
+    <section class="section" id="stock-analysis">
+      <h1>个股分析</h1>
+      <h2>基础分析</h2>
+      <ol>
+        <li>搜索股票代码或名称，选择标的。</li>
+        <li>查看日 K、成交量和关键价位。</li>
+        <li>根据需要创建点位提醒（价格到达、上穿或下穿指定位置）。</li>
+      </ol>
+      <p>点位提醒创建后，到「监控中心」确认规则状态和触发记录。</p>
+
+      <h2>AI 四维分析</h2>
+      <p>配置 AI 后可对个股生成多维分析报告。报告使用本地可用行情与指标作为上下文，发送给当前配置的 AI 服务。同一交易日已有报告时，页面提示查看现有报告或重新生成；重新生成会产生新的模型调用和费用。</p>
+
+      <h2>历史报告</h2>
+      <p>支持查看、复制、删除和重新分析历史报告。复制失败时确认浏览器剪贴板权限。</p>
+    </section>
+
+    <!-- ===== 章节：ladder ===== -->
+    <section class="section" id="ladder">
+      <h1>连板梯队</h1>
+      <p>查看涨停、跌停及其连续状态。</p>
+      <ul>
+        <li><strong>涨停模式</strong>：涨停、炸板、断板及连板梯队。</li>
+        <li><strong>跌停模式</strong>：跌停、翘板、止跌及连跌梯队。</li>
+      </ul>
+      <p>可切换交易日期查看历史结果。涨跌停价格按市场、板块、ST 状态及对应日期规则计算，不能简单固定为 10%。卡片展示名称代码、涨跌幅、连板/连跌高度、封单量与封单额、概念行业标签、一字板标签；「一字」基于已有行情字段计算，不额外发起高频请求。</p>
+      <p>有 Pro+ 五档能力时，可用盘口数据修正真假封板状态；关闭修正或权限不足时，以日 K/实时行情可用字段判断。点击概念/行业标签可打开成分股列表。</p>
+    </section>
+
+    <!-- ===== 章节：concept-industry ===== -->
+    <section class="section" id="concept-industry">
+      <h1>概念与行业分析</h1>
+      <h2>概念分析</h2>
+      <p>使用内置同花顺概念数据，观察板块轮动、强弱和龙头候选。没有概念数据时页面提供获取入口，首次获取完成后再分析；概念成分随数据源更新，不应把旧成分永久视为最新状态。主要功能：涨幅与 RPS 轮动、领涨主线与领跌方向、概念矩阵、概念搜索与成分数量、龙头候选及评分拆解。</p>
+      <h2>行业分析</h2>
+      <p>使用内置同花顺行业数据，按行业层级观察强弱、涨跌分布与龙头：切换行业层级、最强行业与涨跌行业数量、领涨/领跌行业、行业矩阵、成分股与龙头评分。不同层级分类范围不同，比较前确认处于同一层级。</p>
+    </section>
+
+    <!-- ===== 章节：financials ===== -->
+    <section class="section" id="financials">
+      <h1>财务分析</h1>
+      <p>依赖 Expert 或等效财务数据能力。</p>
+      <h2>数据内容</h2>
+      <p>核心财务指标、利润表、资产负债表、现金流量表、股本及历史股本。历史股本用于改善历史换手率计算：当日数据优先使用最新维表；历史日期有可用历史股本时使用历史股本，没有则回退最新维表股本。</p>
+      <h2>同步与更新</h2>
+      <p>可全部同步，也可对单张财务表更新；首次使用建议全部同步，后续只更新变化数据。财务卡片支持按 Enriched 批次重算历史换手率并覆盖结果，执行前确认历史股本同步完整，任务期间避免重复发起同一重算。</p>
+      <h2>个股财务与 AI 分析</h2>
+      <p>搜索股票后查看各报告期指标和报表变化；财报日期、公告日期和交易日期含义不同，避免使用尚未公告的数据推断更早交易日。配置 AI 后可生成财务报告、关注点和风险摘要，支持复制、最小化、查看历史报告与重新生成。本地最多保留 20 条相关历史报告，需长期保存的内容请及时导出。</p>
+    </section>
+
+    <!-- ===== 章节：monitor ===== -->
+    <section class="section" id="monitor">
+      <h1>监控中心</h1>
+      <p>监控中心管理规则和查看触发历史。页面左侧为触发记录，右侧为规则列表或编辑区。</p>
+      <h2>监控类型</h2>
+      <ul>
+        <li><strong>策略监控</strong>：监控交易信号或策略结果变化。</li>
+        <li><strong>个股信号</strong>：监控信号库中的技术或自定义信号。</li>
+        <li><strong>价格/涨跌监控</strong>：监控价格、涨跌幅或上下穿条件。</li>
+        <li><strong>市场异动</strong>：监控涨跌停、连板或其他市场状态。</li>
+        <li><strong>板块监控</strong>：监控大盘指数、概念题材或行业板块的涨跌幅和分钟异动。</li>
+      </ul>
+      <h2>创建规则</h2>
+      <ol>
+        <li>点击新增规则，选择规则类型与分类。</li>
+        <li>选择作用范围：指定标的、策略结果或全市场。</li>
+        <li>添加一个或多个条件，选择组合方式 AND（全部成立）或 OR（任一成立）。</li>
+        <li>设置冷却期、严重级别和提示内容。</li>
+        <li>保存并启用。</li>
+      </ol>
+      <p>全市场规则计算范围大，创建前确认数据权限和刷新频率。板块监控中一条大盘规则可选择多个指数，系统对每个指数独立判断和触发；概念与行业按有效成分股等权计算，有效成分不少于 5 只且实时行情覆盖率达到 80% 才触发；分钟异动在收集到完整窗口后才开始判断，首份行情只用于建立基线。</p>
+      <h2>规则管理与触发记录</h2>
+      <ul>
+        <li>规则可启用、停用、编辑、删除；删除需二次确认，不会删除股票数据或策略文件。</li>
+        <li>冷却期避免同一条件持续成立时重复通知；测试规则时可临时缩短，正式使用恢复合理值。</li>
+        <li>触发记录支持筛选和清空；清空只删除历史，不删除监控规则。点击记录中的股票打开详情，点击标签打开成分股列表。</li>
+      </ul>
+      <div class="callout warn">
+        涉及日内分时的信号需要分钟 K/日内分时权限、已开启实时监听、标的已纳入分钟数据范围；没有分钟数据时，不应使用日 K 猜测日内穿越时点。
+      </div>
+    </section>
+
+    <!-- ===== 章节：ai-review ===== -->
+    <section class="section" id="ai-review">
+      <h1>AI 复盘</h1>
+      <p>基于市场数据生成盘后总结。</p>
+      <h2>使用前准备</h2>
+      <ol>
+        <li>在「设置 → AI 设置」完成模型配置并测试连接。</li>
+        <li>同步当日日 K 和指数数据。</li>
+        <li>如需通知，配置飞书或企业微信。</li>
+      </ol>
+      <h2>生成复盘</h2>
+      <ol>
+        <li>打开「AI 复盘」，刷新市场数据。</li>
+        <li>可选填写特别关注的方向或问题。</li>
+        <li>开始生成，页面流式展示结果，完成后归档。</li>
+      </ol>
+      <p>支持复制、下载 Markdown 和删除历史报告。可设置定时复盘：任务运行时需要服务持续在线、数据已更新且 AI 配置有效，完成后可推送到飞书或企业微信。定时任务时间应晚于日 K 和指数数据完成时间，避免用不完整数据生成报告。</p>
+    </section>
+
+    <!-- ===== 章节：index ===== -->
+    <section class="section" id="index">
+      <h1>指数</h1>
+      <p>管理指数列表、指数日 K 与分时行情。</p>
+      <h2>数据同步</h2>
+      <p>首次使用依次执行：同步指数列表 → 同步指数日 K。指数数据与股票策略数据链路隔离，不会混入股票策略范围。</p>
+      <h2>查看指数</h2>
+      <p>搜索并选择指数，设置日期范围，查看日 K；支持时查看与日 K 联动的分时走势。指数分时通常需要 Pro+ 能力，无权限时日 K 功能仍可独立使用。</p>
+    </section>
+
+    <!-- ===== 章节：data-source ===== -->
+    <section class="section" id="data-source">
+      <h1>数据源</h1>
+      <p>TickFlow 是内置默认数据源，同时支持插件化接入第三方数据源（YAML 声明自有接口、Python 插件），在「设置 → 数据源」切换。</p>
+      <h2>TickFlow 档位与能力</h2>
+      <table>
+        <tr><th>档位</th><th>实时能力</th></tr>
+        <tr><td>Free</td><td>自选页前 5 个标的实时监控（最低 6 秒刷新）</td></tr>
+        <tr><td>Starter+</td><td>全市场实时行情</td></tr>
+        <tr><td>Pro</td><td>分钟 K + 盘口</td></tr>
+        <tr><td>Expert</td><td>WebSocket + 财务数据 + 全量分钟</td></tr>
+      </table>
+      <p>功能门槛的统一标准是“能力”（<code>kline.minute.batch</code>、<code>depth5.batch</code>、<code>financial</code> 等能力键）：其他第三方/自定义数据源以声明的数据集能力为准，系统按当前数据源配置自动合并判定，UI 提示以能力名表达。在「设置 → 凭据与能力」点「重新检测」可查看当前档位标签；更换 Key 后应立即重新检测，页面功能以检测结果为准。</p>
+      <h2>全量分钟（full_minute）</h2>
+      <p>「全量分钟」是独立能力（能力键 <code>full_minute</code>）：盘中把全市场当日 1 分钟 K 持续增量落盘到本地 <code>data/kline_minute/</code> 当日分区，分钟策略与分时视图即可读到新鲜数据。接入方式二选一：TickFlow Expert 档零配置即用；插件/自定义源声明 <code>full_minute</code> 数据集并在「设置 → 数据源 → 全量分钟」路由到该源。</p>
+      <ul>
+        <li>开启实时行情后落盘服务自动启动；仅连续竞价时段（9:30–11:30 / 13:00–15:00）运行，午休/收盘自动暂停与恢复。</li>
+        <li>冷启动自动触发全天修复轮补齐缺口；稳态走增量轮（默认 6 秒一轮，可配 3–120 秒），幂等合并。</li>
+        <li>标的池为 A 股股票，ETF 不在内；覆盖滞后超阈值或连续空轮会自动再跑修复轮自愈。</li>
+      </ul>
+      <h2>自定义数据源接入步骤</h2>
+      <ol>
+        <li>新建自定义数据源，为需要的数据集配置端点。</li>
+        <li>设置请求方法和鉴权、RPM、批量大小、超时。</li>
+        <li>指定响应数据路径，完成字段映射。</li>
+        <li>测试端点；测试成功只代表样例请求可解析，正式同步前还需确认分页、限流和历史范围。</li>
+        <li>小范围同步并核对数据，再切换为正式数据源。</li>
+      </ol>
+      <p>切换数据源后，未配置的数据集按系统回退规则使用 TickFlow；切换前先测试新数据源，确认代码、日期、价格和复权字段能正确归一。</p>
+    </section>
+
+    <!-- ===== 章节：ai-config ===== -->
+    <section class="section" id="ai-config">
+      <h1>AI 设置</h1>
+      <p>用于自然语言生成策略、个股/财务分析与复盘。所有配置留空即跳过，不影响核心功能；支持任意 OpenAI 兼容接口，也支持 Codex CLI（复用本机登录态）。提供 DeepSeek、通义、GLM、Kimi 和自定义服务等预设。</p>
+      <table>
+        <tr><th>配置项</th><th>说明</th></tr>
+        <tr><td><code>AI_PROVIDER</code></td><td><code>openai_compat</code>（OpenAI 兼容，DeepSeek/通义/OpenAI 等）或 <code>ollama</code>（本地模型）</td></tr>
+        <tr><td><code>AI_BASE_URL</code></td><td>接口地址，如 DeepSeek <code>https://api.deepseek.com/v1</code></td></tr>
+        <tr><td><code>AI_API_KEY</code></td><td>留空则关闭 AI 功能</td></tr>
+        <tr><td><code>AI_MODEL</code></td><td>模型名，如 <code>deepseek-chat</code></td></tr>
+        <tr><td><code>AI_PROTOCOL</code></td><td><code>chat_completions</code>（默认，兼容面最广）或 <code>responses</code>（OpenAI 官方新协议）</td></tr>
+        <tr><td><code>AI_DAILY_TOKEN_BUDGET</code></td><td>每日 token 预算上限，超限后当日不再调用</td></tr>
+      </table>
+      <div class="callout warn">
+        <div class="title">数据边界</div>
+        AI 分析会把所需行情、指标、财务信息和用户输入发送给所配置的模型服务。使用第三方服务前应了解其数据和隐私政策；涉及私有策略或敏感数据时，使用可信服务并确认存储政策。保存前先执行「测试连接」，确认地址、模型和认证有效。
+      </div>
+    </section>
+
+    <!-- ===== 章节：realtime ===== -->
+    <section class="section" id="realtime">
+      <h1>实时监控</h1>
+      <p>在「设置 → 实时监控」配置：是否开启实时行情、轮询间隔、页面 SSE 刷新范围、自选/策略日 K 与分时图刷新、左侧指数卡片刷新、连板五档盘口修正、飞书和企业微信 Webhook、企业微信智能机器人长连接。</p>
+      <ul>
+        <li>Free 能力仅实时覆盖自选前 5 个标的。</li>
+        <li>轮询间隔不应低于数据源允许的频率，否则可能触发限流。</li>
+        <li>实时刷新时，已有日 K/分时内容保留到新数据返回后再更新，避免列表列短暂消失和闪烁。</li>
+      </ul>
+    </section>
+
+    <!-- ===== 章节：notify ===== -->
+    <section class="section" id="notify">
+      <h1>通知渠道</h1>
+      <p>可用通知：页面弹窗、通知声效、语音播报、飞书 Webhook、企业微信 Webhook、企业微信智能机器人长连接。页面通知、声效和语音在「设置 → 系统设置」配置；飞书与企业微信在「设置 → 实时监控」配置。</p>
+      <ul>
+        <li>发送到飞书/企业微信的内容直接展示业务标题和正文；内部类型（如 <code>ladder</code>）会转换为用户可理解的连板/梯队描述。</li>
+        <li>自定义 Webhook 支持 HMAC-SHA256 签名：配置 Secret 后，请求体带 <code>X-TickFlow-Timestamp</code> 与 <code>X-TickFlow-Signature: sha256=&lt;hex&gt;</code>，接收方可验签。</li>
+      </ul>
+      <div class="callout tip">上线前至少测试一条通知链路；系统级告警（数据源 down、管道失败、磁盘水位、连续 5xx、watchdog 退出）也走同一批渠道。</div>
+    </section>
+
+    <!-- ===== 章节：page-settings ===== -->
+    <section class="section" id="page-settings">
+      <h1>页面与菜单设置</h1>
+      <h2>扩展页面</h2>
+      <p>把扩展数据字段组合成动态分析页面并加入左侧菜单。配置时选择数据集、展示字段、筛选项和页面名称。删除扩展页面只移除页面配置，不等同于删除扩展数据集。</p>
+      <h2>菜单设置</h2>
+      <p>支持拖动排序、显示/隐藏菜单和配置数字徽标，扩展页面也可参与排序。隐藏菜单只影响导航显示，不删除页面数据或功能配置。</p>
+      <h2>系统设置</h2>
+      <p>可设置：进入策略页是否自动运行、监控通知弹窗、通知声效、语音播报与语音选择、刷新前端缓存、查看当前版本和检查更新。「刷新前端缓存」用于解决升级后仍显示旧页面的问题，不会清除用户配置和本地股票数据。</p>
+      <h2>配置备份</h2>
+      <p>用于切换设备或重装系统时迁移配置。<strong>导出</strong>按类别勾选（默认全选）生成 ZIP：策略源码与调参覆盖、自定义信号/因子/监控规则、偏好与自选、批量持仓与模拟盘账户、挖掘候选、数据源与扩展页面配置、语音包、历史记录；密钥默认不勾选。行情数据、K 线缓存、回测矩阵、任务记录等可重新同步或派生的运行数据不在备份范围内。</p>
+      <div class="callout danger">
+        <div class="title">备份安全</div>
+        勾选密钥后备份文件包含明文敏感信息，务必妥善保管，切勿分享或上传公开位置。扩展页面包含可执行代码（编译后的页面脚本），策略源码导入时会做安全校验，页面脚本无法校验——只导入来源可信的备份文件。
+      </div>
+      <p><strong>导入</strong>时先解析预览（各类别条目数、同名冲突），可按类别勾选部分导入；同名文件默认跳过，可勾选覆盖；偏好与密钥按合并写入；策略源码未通过安全校验的条目跳过并说明原因。</p>
+    </section>
+
+    <!-- ===== 章节：data-overview ===== -->
+    <section class="section" id="data-overview">
+      <h1>数据画像与同步</h1>
+      <p>数据页是系统的数据管理中心。策略、回测和分析出现异常时，先在此确认数据状态。</p>
+      <h2>数据画像卡片</h2>
+      <p>可能包含：个股维表、日 K、除权因子、Enriched、指数、ETF、分钟 K、财务数据与历史股本、扩展数据。卡片显示数据量、日期范围、更新时间或任务状态；“有数据”不代表所有日期均完整，应结合起止日期判断。</p>
+      <h2>立即同步</h2>
+      <p>按当前配置更新数据，执行前可选择范围：A 股、指数、ETF。同步可能包含多个阶段。关闭浏览器页面一般不会立即停止后端任务，但不要在任务进行中清除数据或重启服务。</p>
+      <h2>页面设置与任务时间</h2>
+      <p>可设置盘前维表任务时间、盘后数据管道时间、实时行情开关、轮询间隔、同步批次等参数。盘后管道应晚于数据源完成当日更新的时间；交易日内频繁运行全量管道可能得到不完整日 K。</p>
+    </section>
+
+    <!-- ===== 章节：data-integrity ===== -->
+    <section class="section" id="data-integrity">
+      <h1>自检与修补</h1>
+      <p>在「数据 → 自检/修补」中选择股票、ETF、指数及最近 7/30/90 天或一年，点击「开始自检」。检查范围为历史原始日 K，包含交易日分区缺失、盘中快照未定版、文件损坏或为空、字段缺失及价格/成交量异常；当天仍在更新的数据不参与检查。</p>
+      <ul>
+        <li>没有历史数据的资产会单独提示先同步，不会把首次同步前的日期都判成缺口。</li>
+        <li>交易日历不可用且不能由其他资产确认的日期标为「待核实」，不自动修补。</li>
+        <li>点击「修补已确认问题」并确认后，可定位的异常只回补对应股票和日期；文件无法读取、缺少标识或整日缺失时，才回补该日期的整类日 K。</li>
+        <li>所有待修补日 K 先暂存并校验，通过后才备份原文件并写入；指标只更新各自最早异常日起的基础指标，不改其他股票行情。</li>
+      </ul>
+      <p>已知异常和待重算状态跨重启保留；日 K 修好而指标计算失败/取消时，下次只继续重算，不重新下载已校验日 K。相关策略、回测和监控在修补完成前会拒绝使用异常数据。最近一次报告保存在 <code>user_data/integrity_report.json</code>，异常状态保存在 <code>user_data/daily_integrity_state.json</code>，原文件备份位于 <code>integrity_backups/</code>。该功能不验证分钟 K、财务、除权因子本身，也不判断上游报价真实性。</p>
+    </section>
+
+    <!-- ===== 章节：data-extend ===== -->
+    <section class="section" id="data-extend">
+      <h1>扩展历史与重算</h1>
+      <h2>扩展历史</h2>
+      <p>把本地日 K 等数据向更早日期扩展；扩展范围受数据源权限和服务端历史覆盖范围限制。</p>
+      <h2>修正数据</h2>
+      <p>重新获取或修复指定范围内的异常数据，适用于缺失交易日、字段异常或历史规则更新后的修正。修正前先缩小日期和标的范围；全量修正耗时较长，也会增加数据源调用量。</p>
+      <h2>Enriched 重算</h2>
+      <p>Enriched 是供策略和分析使用的增强数据表，包含基础行情衍生指标、信号和扩展字段。以下情况通常需要重算：更新了计算逻辑、补充了历史日 K 或除权因子、新增或启用了需要落入 Enriched 的字段、历史结果存在缺失。可按配置批次计算，避免一次加载全部标的；重算覆盖对应范围的 Enriched 结果，不删除原始日 K。</p>
+      <h2>财务换手率重算</h2>
+      <p>财务数据和历史股本同步后，可按 Enriched 批次重算历史换手率：当前日期优先用最新维表股本，历史日期优先用当时可用的历史股本，缺少时回退最新维表股本。重算覆盖目标范围换手率字段，应等待任务完成并检查日志。</p>
+      <h2>分钟 K 设置</h2>
+      <p>分钟 K 数据量较大，需明确标的池、日期范围、时间周期、权限和调用频率。开启日内监控并不自动补齐全部历史分钟 K；用于回测时，应单独确认回测区间覆盖完整。</p>
+    </section>
+
+    <!-- ===== 章节：data-ext ===== -->
+    <section class="section" id="data-ext">
+      <h1>扩展数据接入</h1>
+      <p>支持 HTTP 定时拉取、CSV/Excel 文件上传、JSON API 写入。数据至少必须归一到 <code>symbol</code>，才能与股票维表和其他分析数据关联。</p>
+      <table>
+        <tr><th>存储模式</th><th>适用</th></tr>
+        <tr><td>Snapshot</td><td>只保留当前状态，适合标签、分类和最新属性</td></tr>
+        <tr><td>时序模式</td><td>按日期保存历史值，适合每日指标、评分或事件</td></tr>
+      </table>
+      <div class="callout warn">选择错误的存储模式会影响历史回测：会随时间变化的指标不应只保存为当前快照。扩展数据同步成功后，可在「设置 → 扩展页面」选择字段生成动态分析菜单；需要在策略中使用扩展字段时，确认该字段已进入对应策略数据链路或 Enriched 数据。</div>
+    </section>
+
+    <!-- ===== 章节：data-clear ===== -->
+    <section class="section" id="data-clear">
+      <h1>清除数据</h1>
+      <p>清除数据用于重新初始化本地数据，可能影响所有策略、回测和分析页面。执行前必须：</p>
+      <ol>
+        <li>备份整个 <code>data/</code> 目录。</li>
+        <li>确认没有同步或计算任务运行。</li>
+        <li>明确清除范围。</li>
+        <li>预留重新同步时间。</li>
+      </ol>
+      <p>Windows 或受限沙箱中若系统回收站不可用，页面使用受控的直接删除回退流程；目标路径仍受安全校验，不能借此删除任意目录。</p>
+    </section>
+
+    <!-- ===== 章节：accounts ===== -->
+    <section class="section" id="accounts">
+      <h1>账号与权限</h1>
+      <h2>角色</h2>
+      <table>
+        <tr><th>角色</th><th>说明</th></tr>
+        <tr><td>超级管理员</td><td>全部权限，可管理用户与权限组；首个注册账号即为超级管理员</td></tr>
+        <tr><td>普通管理员</td><td>按分配的管理权限运营</td></tr>
+        <tr><td>编辑者（默认）</td><td>常规使用权限；可在策略、分析等页面工作</td></tr>
+      </table>
+      <p>新增账号、改密码、权限组调整都在「管理后台 → 用户与权限」完成。各账号的自选/报告/会话等私有数据按账号目录隔离；行情与策略等共享数据由同一部署共用。</p>
+      <h2>登录与会话</h2>
+      <ul>
+        <li>登录使用邮箱 + 密码；同 IP 连续错误 5 次锁定 5 分钟。</li>
+        <li>会话为 HttpOnly Cookie，30 天有效；退出登录吊销当前会话。</li>
+        <li>已配置 SMTP 可在登录页点「忘记密码」自助重置；未配置时由另一名管理员在后台重置。</li>
+      </ul>
+      <div class="callout tip">
+        唯一超级管理员且无法登录时，应由部署管理员在停服并备份 <code>data/</code> 后按运维流程处理，不要直接编辑数据库。账号与会话存储在 <code>data/user_data/users.db</code>，旧 <code>auth.json</code> 已不参与登录。
+      </div>
+    </section>
+
+    <!-- ===== 章节：open-api ===== -->
+    <section class="section" id="open-api">
+      <h1>API Token 与开放接口</h1>
+      <p>外部程序（自己的看板/脚本/量化服务）凭 API Token 直接调用核心读取、写入与任务接口，无需面板密码会话。Token 在「设置 → 开放接口」新建：名称 + 权限勾选，明文 <code>tsp_</code> 前缀只显示一次；可随时吊销，吊销立即生效。服务端只存 SHA-256 哈希，文件权限 0600。</p>
+      <h2>权限 scope</h2>
+      <table>
+        <tr><th>scope</th><th>能力</th></tr>
+        <tr><td><code>read:market</code></td><td>标的搜索 / 日 K / 分时 / 指数 / 市场快照（默认勾选）</td></tr>
+        <tr><td><code>read:ext</code></td><td>扩展表 rows / values / schema 查询</td></tr>
+        <tr><td><code>write:ext</code></td><td>向已配置的扩展表程序化写入行数据</td></tr>
+        <tr><td><code>read:analysis</code></td><td>策略清单与结果 / 回测报告 / 市场环境 / 告警</td></tr>
+        <tr><td><code>run:backtest</code></td><td>提交回测 / 策略 / 因子检验任务</td></tr>
+        <tr><td><code>paper:trade</code></td><td>模拟盘读取与下单/撤单（最高敏感）</td></tr>
+      </table>
+      <p>管理面永不开放给 Token：数据同步、扩展表结构配置（建表/字段/拉取/上传）、设置等只能通过面板密码会话。<code>write:ext</code> 只写行数据，不能改写表结构；写入的数据会进入策略/回测数据面，谨慎授予。</p>
+      <h2>调用方式</h2>
+      <pre><code>curl -H "Authorization: Bearer tsp_xxxx" \
+  "http://localhost:3018/api/kline/daily?symbol=600519.SH&amp;start_date=2026-01-01"</code></pre>
+      <ul>
+        <li>带 <code>Authorization: Bearer</code> 走 Token 网关（scope 校验 + 限流），不带则走密码会话；面板与外部调用互不影响。</li>
+        <li>限流：每 Token 默认 120 次/分钟（滑动窗口，<code>OPEN_API_RATE_LIMIT_PER_MIN</code> 可调），响应带 <code>X-RateLimit-Remaining</code> / <code>X-RateLimit-Limit</code> 头，超限 429 + <code>Retry-After</code>。</li>
+        <li>错误语义：401 Token 无效或已吊销 / 403 权限不足或接口未开放 / 429 超限。</li>
+      </ul>
+      <h2>网络门禁</h2>
+      <p>Token 通道默认只接受本机与内网请求（<code>127.0.0.1</code>、<code>::1</code>、<code>10.x</code>、<code>172.16-31.x</code>、<code>192.168.x</code>），公网来源 403；门禁在验签之前拦截。远程调用推荐 SSH 隧道，或显式设置 <code>API_TOKEN_LOCAL_ONLY=0</code> 放开。开放接口面向本部署的二次开发与个人工具集成，不作为数据对外分发通道。</p>
+      <h2>事件流（SSE）</h2>
+      <p>EventSource 无法携带 Authorization 头，走短期票据两步接入：</p>
+      <pre><code># ① Bearer 换一次性票据（60 秒，任意 scope）
+curl -X POST -H "Authorization: Bearer tsp_xxxx" http://localhost:3018/api/events/ticket
+# → {"ticket":"tse_xxx","expires_in":60,"stream":"/api/events?ticket=tse_xxx"}
+
+# ② 订阅事件流
+curl -N "http://localhost:3018/api/events?ticket=tse_xxx"</code></pre>
+      <p>票据一次性且短时效，泄漏最多损失一次事件订阅，不能调任何 REST 端点；断线重连需重新换票。</p>
+      <h2>契约与 MCP</h2>
+      <ul>
+        <li>机器可读契约：<code>GET /api/openapi.json?tier=a</code>，返回按网关规则表过滤后的 OpenAPI 3 规范。</li>
+        <li><code>mcp-server/</code> 提供 MCP 服务器，把开放接口包装成 AI 客户端可调用工具；工具按 Token scope 暴露，权限裁决仍在网关；模拟盘交易类端点刻意未包装。</li>
+      </ul>
+    </section>
+
+    <!-- ===== 章节：backup ===== -->
+    <section class="section" id="backup">
+      <h1>数据目录与备份</h1>
+      <h2>主要目录</h2>
+      <p>项目数据主要位于 <code>data/</code>（Docker 容器内通常为 <code>/app/data</code>）；自定义和 AI 策略位于 <code>data/strategies/custom/</code>、<code>data/strategies/ai/</code>。整个 <code>data/</code> 目录不纳入 Git，行情、财务、自选、回测、监控记录与扩展数据都是运行时生成或拉取的用户数据。</p>
+      <h2>备份内容</h2>
+      <p>至少备份：整个 <code>data/</code> 目录、<code>.env</code>、额外安装的数据源插件或自定义部署配置。<code>.env</code> 含敏感信息，备份文件应加密或保存在可信位置。</p>
+      <h2>备份时机</h2>
+      <p>建议在以下操作前备份：升级项目、清除或全量重算数据、更换数据源、调整数据库或存储结构、迁移服务器。备份时最好先停止服务，或至少确认没有同步、回测和重算任务运行，以保证文件一致性。</p>
+      <div class="callout warn">
+        行情数据可重建，但 <code>user_data/</code>（账号、会话、策略偏好、监控规则、扩展页面配置）丢失无法再生；建议对 <code>user_data</code> 做独立的定期备份并保留多份轮转。
+      </div>
+    </section>
+
+    <!-- ===== 章节：migrate ===== -->
+    <section class="section" id="migrate">
+      <h1>数据迁移</h1>
+      <p>迁移到新机器的一般步骤：</p>
+      <ol>
+        <li>在原机器停止服务。</li>
+        <li>备份 <code>data/</code>、<code>.env</code> 和额外插件。</li>
+        <li>在新机器获取相同或兼容版本代码。</li>
+        <li>恢复上述文件到对应位置。</li>
+        <li>启动服务。</li>
+        <li>重新检测 TickFlow 与 AI 连接。</li>
+        <li>抽查自选、策略、数据范围和监控规则。</li>
+      </ol>
+      <p>跨系统迁移时检查文件权限和 Docker 挂载路径。Docker 升级前先核对数据目录：容器内实际目录应位于挂载目标内，升级前后使用同一份宿主机目录；自定义绝对数据路径需把宿主机目录挂载到相同目标。</p>
+    </section>
+
+    <!-- ===== 章节：upgrade ===== -->
+    <section class="section" id="upgrade">
+      <h1>更新与维护</h1>
+      <h2>Docker / 镜像更新</h2>
+      <p>GHCR 镜像用户备份 <code>data/</code> 后：</p>
+      <pre><code>docker pull ghcr.io/shy3130/tick-stock-panel:latest
+docker rm -f tsp
+# 按原有完整 docker run 重新执行，保留 --env-file、自定义 -e 和数据挂载</code></pre>
+      <p>Compose 用户：</p>
+      <pre><code>git pull
+docker compose up --build -d
+docker compose logs -f</code></pre>
+      <h2>开发模式更新</h2>
+      <p>更新代码后根据锁文件重新安装依赖并重启 <code>./dev.sh</code> 或 <code>.\dev.ps1</code>；页面仍显示旧版本时，使用「设置 → 系统设置 → 刷新前端缓存」。</p>
+      <h2>更新后检查</h2>
+      <ol>
+        <li>首页和设置页能否打开；当前版本号是否正确。</li>
+        <li>数据画像是否正常。</li>
+        <li>自选和策略结果是否正常加载。</li>
+        <li>实时行情、AI 和通知连接是否有效。</li>
+        <li>重要监控规则是否仍启用。</li>
+      </ol>
+      <div class="callout danger">
+        <div class="title">禁止使用的清理命令</div>
+        不要在项目目录执行 <code>git clean -fdx</code>、<code>git reset --hard</code>，或直接删除整个项目文件夹重新 clone——它们会删除 Git 未跟踪和忽略的文件，包括全部本地用户数据、密钥配置与自定义策略。<code>git pull</code> 报冲突时，先 <code>git stash</code> 暂存再 pull。
+      </div>
+      <h2>盘后发布窗口</h2>
+      <p>每个交易日 <strong>15:20–15:50</strong> 不要发布/重启应用：盘后管道默认 15:35 拉官方日 K，15:35 后实时写盘会被定版守卫拒绝；15:40 后仍未定版会触发 <code>daily_not_finalized</code> 告警。必须在此窗口发布时，发布后到数据页确认当天 <code>kline_daily</code> 有 <code>.finalized.json</code>，或等待启动补跑自动完成。</p>
+    </section>
+
+    <!-- ===== 章节：ops-health ===== -->
+    <section class="section" id="ops-health">
+      <h1>健康检查与可观测</h1>
+      <h2>健康接口</h2>
+      <table>
+        <tr><th>接口</th><th>用途</th></tr>
+        <tr><td><code>GET /health</code></td><td>返回状态、版本、数据源模式、内存快照（面板认证不强制）</td></tr>
+        <tr><td><code>GET /ready</code></td><td>就绪探针：内部可服务能力三态检查，未就绪返回 503；外部数据源抖动不影响容器存活</td></tr>
+        <tr><td><code>GET /api/data/workload</code></td><td>请求量、实际执行量、复用/缓存命中、失败次数、队列、缓存与 SSE 订阅数（进程级有界计数，不记录请求参数与凭据）</td></tr>
+      </table>
+      <h2>自愈机制</h2>
+      <ul>
+        <li><strong>进程僵死探测</strong>：内置看门狗周期探测，失败后以退出码 70 交外部 supervisor 重启。</li>
+        <li><strong>启动自检</strong>：完整性检查 + 已知异常登记，日 K 可自动/手动修补；分钟缺口冷启动修复轮。</li>
+        <li><strong>进程锁恢复</strong>：多开/旧进程持锁时通过 flock 与持有者定位安全接管。</li>
+        <li><strong>告警中心</strong>：数据源 down/恢复、管道失败、完整性阻塞、连续 5xx、磁盘水位、日志停用、watchdog 退出等系统事件统一记录并推送。</li>
+      </ul>
+      <h2>外部托管建议</h2>
+      <ul>
+        <li>systemd：<code>Restart=on-failure</code>、<code>RestartSec=3</code>、限制内存与文件句柄；模板见仓库 <code>packaging/systemd/</code>。</li>
+        <li>Docker：<code>--restart unless-stopped</code>，<code>HEALTHCHECK</code> 打 <code>/ready</code>。</li>
+        <li>看门狗只在进程存活时有效；进程整体崩溃或宿主机宕机需要外部探活拉起，建议配置外部 uptime 监控。</li>
+      </ul>
+      <h2>日志位置</h2>
+      <ul>
+        <li>开发模式：查看 <code>dev.sh</code> / <code>dev.ps1</code> 运行终端。</li>
+        <li>Docker：<code>docker compose logs -f</code>；文件日志在 <code>data/logs/</code>，按大小轮转并保留固定份数，敏感信息已脱敏。</li>
+      </ul>
+    </section>
+
+    <!-- ===== 章节：security ===== -->
+    <section class="section" id="security">
+      <h1>安全建议</h1>
+      <h2>敏感信息</h2>
+      <p>以下内容不得提交到公开 Git 仓库：<code>.env</code>、TickFlow Key、AI API Key、飞书/企业微信 Webhook、账号密码、含个人偏好或敏感数据的完整备份。</p>
+      <h2>公网部署</h2>
+      <ul>
+        <li>必须注册管理员账号并设置足够强度的密码。</li>
+        <li>建议通过 HTTPS 反向代理访问，只开放必要端口。</li>
+        <li>限制管理页面和数据目录访问；定期更新项目和基础镜像。</li>
+        <li>不在日志中打印完整密钥或 Webhook。</li>
+        <li>单租户自用部署建议在反代/网络层收口自助注册与找回密码端点；开放注册前明确产品定位。</li>
+      </ul>
+      <h2>第三方代码与插件</h2>
+      <p>安装第三方策略或数据源插件前，审查代码、依赖和网络访问行为；不要运行来源不明的插件，也不要向第三方提交不必要的本地数据。插件运行在本地服务环境中，可能具备读取配置和访问网络的能力。</p>
+      <h2>AI 数据边界</h2>
+      <p>使用 AI 功能时，相关行情、财务内容、策略描述和用户输入可能发送到所配置的模型服务。涉及私有策略或敏感数据时，使用可信服务并确认其存储政策。</p>
+      <h2>忘记密码</h2>
+      <p>已配置邮件服务：登录页点「忘记密码」，用已验证邮箱收验证码自助重置。未配置 SMTP：由另一名管理员在「管理后台 → 用户与权限」重置；唯一超级管理员且无法登录时，停服备份 <code>data/</code> 后按运维流程处理，不要直接编辑数据库。</p>
+    </section>
+
+    <!-- ===== 章节：faq ===== -->
+    <section class="section" id="faq">
+      <h1>常见问题与排错</h1>
+
+      <h3>页面卡片没有数据</h3>
+      <ol>
+        <li>打开「数据」检查相应数据集是否存在。</li>
+        <li>确认日期范围覆盖当前选择日期。</li>
+        <li>查看同步任务历史和后端日志。</li>
+        <li>完成日 K 后确认 Enriched 是否已生成。</li>
+      </ol>
+
+      <h3>策略显示 0 个结果</h3>
+      <p>依次检查：当前是股票还是 ETF、选择日期是否有数据、基础过滤是否过严、策略参数是否合理、结果表是否还有额外筛选、Enriched 是否完成更新。开启或关闭策略监控不应改变结果数量；若数量随监控开关变化，记录策略 ID、日期和操作步骤并查看后端日志。</p>
+
+      <h3>策略卡片加载很慢</h3>
+      <ul>
+        <li>卡片摘要批量加载，明细点击后按需加载。</li>
+        <li>关闭「进入策略页自动运行」。</li>
+        <li>确认后端没有同时执行全量同步、重算或大量回测。</li>
+        <li>检查磁盘速度和 Enriched 数据量、浏览器网络请求及后端耗时日志。</li>
+      </ul>
+
+      <h3>创建策略提示 ID 已存在</h3>
+      <ol>
+        <li>关闭创建对话框并重新打开，确认表单没有加载上次草稿。</li>
+        <li>在系统设置刷新前端缓存。</li>
+        <li>检查 <code>data/strategies/custom/</code> 和 <code>data/strategies/ai/</code> 是否确有同名策略。</li>
+      </ol>
+      <p>不要仅为消除提示而随意删除文件，先确认文件对应的策略。</p>
+
+      <h3>分时或分钟回测不可用</h3>
+      <ul>
+        <li>重新检测是否有 Pro+ 或等效分钟能力。</li>
+        <li>检查分钟数据同步状态和日期范围，标的是否已加入分钟数据池。</li>
+        <li>检查实时监控设置中的分时刷新开关；回测时确认已开启分钟成交选项。</li>
+      </ul>
+
+      <h3>AI 功能不可用</h3>
+      <ul>
+        <li>在「AI 设置」重新测试连接，检查 API 地址、模型名称和 Key。</li>
+        <li>检查模型账户余额、预算和调用限额。</li>
+        <li>Codex CLI 模式检查本机登录状态；确认服务端能访问所配置的 AI 地址。</li>
+      </ul>
+
+      <h3>“规范化 META 失败：找不到 META 字典”</h3>
+      <ol>
+        <li>使用当前版本内置的策略提示词重新生成。</li>
+        <li>不要手工删除生成内容中的 <code>META</code>。</li>
+        <li>检查模型是否截断输出；确认返回的是完整策略代码，而不是解释性文本。</li>
+      </ol>
+
+      <h3>财务数据不可用</h3>
+      <ul>
+        <li>确认检测到 Expert 或等效财务能力。</li>
+        <li>在数据页同步财务数据，检查单表更新时间和任务日志。</li>
+        <li>历史换手率不正确时，先确认历史股本，再执行批次重算。</li>
+      </ul>
+
+      <h3>实时行情不刷新</h3>
+      <ul>
+        <li>确认当前处于交易时段、TickFlow Key 和实时能力有效。</li>
+        <li>开启「设置 → 实时监控 → 实时行情」，检查轮询间隔是否符合服务限制。</li>
+        <li>Free 用户确认标的是否位于自选前 5 个；检查浏览器与后端之间的 SSE 连接。</li>
+      </ul>
+
+      <h3>跌停或涨停信号不准确</h3>
+      <ul>
+        <li>涨跌停规则随板块、ST 状态和历史日期变化，不能固定按 10% 判断。</li>
+        <li>确认个股维表和名称/ST 信息已更新；历史判断使用对应交易日规则。</li>
+        <li>实时信号优先使用合法涨跌停价与实时价格比较，并处理价格精度。</li>
+      </ul>
+
+      <h3>主线排行或情绪周期里没有 ST 板块</h3>
+      <p>市场环境页的「主线过滤」默认开启“统计剔除 ST 股”：ST 是跨行业状态标签而非投资题材，混入会系统性抬高涨停宽度与高度。如需恢复全市场口径，在「市场环境 → 情绪周期 → 主线排行 → 过滤」中关闭开关并保存（自动全量重算约 1–2 分钟）；修改开关或维表名称快照变化后，建议点「重算」使历史与新口径一致。</p>
+
+      <h3>飞书或企业微信没有收到通知</h3>
+      <ul>
+        <li>测试 Webhook 是否有效；检查监控规则是否启用且产生触发记录、冷却期。</li>
+        <li>检查服务端网络能否访问通知地址，查看后端日志中的发送状态。</li>
+      </ul>
+
+      <h3>前端仍是旧界面</h3>
+      <ol>
+        <li>打开「设置 → 系统设置」，点击「刷新前端缓存」。</li>
+        <li>重新加载页面；Docker 部署确认镜像已重新构建。</li>
+      </ol>
+
+      <h3>删除策略失败或返回 500</h3>
+      <ul>
+        <li>确认删除的是用户策略，不是内置策略。</li>
+        <li>检查 <code>data/strategies/</code> 挂载目录是否可写、Docker 宿主机目录权限。</li>
+        <li>查看后端错误日志中的文件路径和具体原因。</li>
+      </ul>
+
+      <h3>数据删除提示回收站不可用</h3>
+      <p>Windows 沙箱或容器可能无法使用系统回收站；当前版本在目标通过安全路径校验后使用受控直接删除。若仍失败，检查数据目录权限和挂载状态，不要手工扩大删除范围。</p>
+
+      <div class="callout tip">
+        定位问题时建议同时记录：发生时间、页面、操作步骤、标的或策略 ID、选择日期、错误提示和相关日志。
+      </div>
+    </section>
+
+    <!-- ===== 章节：glossary ===== -->
+    <section class="section" id="glossary">
+      <h1>术语表</h1>
+      <table>
+        <tr><th>术语</th><th>说明</th></tr>
+        <tr><td>个股维表</td><td>股票代码、名称、市场、行业、股本等基础属性表</td></tr>
+        <tr><td>日 K</td><td>以交易日为周期的开、高、低、收、量、额数据</td></tr>
+        <tr><td>分钟 K</td><td>以分钟为周期的行情数据，用于分时和更精细的回测</td></tr>
+        <tr><td>除权因子</td><td>用于处理分红、送转、拆并股等价格连续性的调整因子</td></tr>
+        <tr><td>Enriched</td><td>在基础行情上计算指标、信号和扩展字段后的策略分析数据</td></tr>
+        <tr><td>Snapshot</td><td>只表达当前状态、不保留每日变化的快照数据</td></tr>
+        <tr><td>RPS</td><td>相对强弱指标，用于比较标的或板块在一段时间内的表现</td></tr>
+        <tr><td>IC</td><td>因子值与未来收益之间的相关性</td></tr>
+        <tr><td>IR</td><td>IC 均值相对波动的稳定性指标</td></tr>
+        <tr><td>IS</td><td>In-Sample，样本内训练或优化区间</td></tr>
+        <tr><td>OOS</td><td>Out-of-Sample，样本外验证区间</td></tr>
+        <tr><td>步进优化</td><td>Walk-Forward Optimization，滚动训练并在相邻区间验证</td></tr>
+        <tr><td>SSE</td><td>服务端向浏览器持续推送更新的连接方式</td></tr>
+        <tr><td>五档盘口</td><td>买卖盘各五档价格与数量，用于辅助判断封板状态</td></tr>
+        <tr><td>冷却期</td><td>规则触发后抑制短时间内重复通知的时长</td></tr>
+        <tr><td>T+1</td><td>A 股买入后通常需下一交易日才能卖出的交易约束</td></tr>
+        <tr><td>滑点</td><td>模拟成交价相对理论价格的不利偏差</td></tr>
+      </table>
+
+      <div class="footer">
+        <p>TSP · A股智能量化工作台用户手册。本文档由项目内 README、操作说明书与 docs/ 配置/部署/功能文档提炼整理；功能与口径以运行版本「设置 → 系统设置」中的实际界面为准。</p>
+        <p>免责声明：本项目用于数据分析和策略研究，不构成投资建议。历史表现不代表未来收益，实盘决策及风险由使用者自行承担。</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+/* ============================================================
+   文档站交互：hash 路由 + 导航高亮 + 搜索过滤 + 移动端抽屉
+   ============================================================ */
+(function () {
+  const nav = document.getElementById('nav');
+  const items = Array.from(nav.querySelectorAll('.nav-item'));
+  const sections = Array.from(document.querySelectorAll('.section'));
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('overlay');
+  const menuBtn = document.getElementById('menuBtn');
+  const searchInput = document.getElementById('searchInput');
+
+  function show(target) {
+    const valid = sections.some(s => s.id === target);
+    const id = valid ? target : 'intro';
+    sections.forEach(s => s.classList.toggle('active', s.id === id));
+    items.forEach(i => i.classList.toggle('active', i.dataset.target === id));
+    const el = document.getElementById(id);
+    if (el) el.scrollTop = 0;
+    window.scrollTo(0, 0);
+  }
+
+  function route() {
+    const hash = location.hash.replace(/^#\//, '');
+    show(hash);
+  }
+
+  items.forEach(item => {
+    item.addEventListener('click', () => {
+      location.hash = '/' + item.dataset.target;
+      closeSidebar();
+    });
+  });
+
+  function closeSidebar() {
+    sidebar.classList.remove('open');
+    overlay.classList.remove('open');
+  }
+  menuBtn.addEventListener('click', () => {
+    sidebar.classList.toggle('open');
+    overlay.classList.toggle('open');
+  });
+  overlay.addEventListener('click', closeSidebar);
+
+  searchInput.addEventListener('input', () => {
+    const q = searchInput.value.trim().toLowerCase();
+    items.forEach(it => {
+      const match = !q || it.textContent.toLowerCase().includes(q);
+      it.classList.toggle('hidden', !match);
+    });
+  });
+
+  window.addEventListener('hashchange', route);
+  route();
+})();
+</script>
+</body>
+</html>

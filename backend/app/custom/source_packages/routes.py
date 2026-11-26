@@ -8,25 +8,24 @@ import yaml
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
-from app.api.auth import COOKIE_NAME, _client_ip
+from app.api.accounts import _client_ip
 from app.data_providers.custom import packages
-from app.services import auth
+from app.services import user_store
 
 
 def _admin_user_session(request: Request) -> bool:
-    """多用户体系的 admin 会话(tf_user_session)也允许管理插件。
+    """邮箱账号会话, 且持有「页面插件管理」权限。
 
-    面板有两种登录: 访问密码(tf_session)与邮箱账号(tf_user_session)。
-    插件安装是代码执行级操作, 邮箱登录只放行 admin 角色, 普通用户仍拒绝。
+    插件安装是代码执行级操作, 只放行有 admin.pages_manage 的账号。
     """
     token = request.cookies.get("tf_user_session", "")
     if not token:
         return False
-    from app.services import user_store
+    from app.services import rbac
     user = user_store.get_user_by_token(token)
     if not user:
         return False
-    return user_store.effective_role(user) == user_store.ROLE_ADMIN
+    return rbac.ADMIN_PAGES_MANAGE in user_store.user_permissions(user)
 
 
 def require_management(request: Request):
@@ -39,11 +38,12 @@ def require_management(request: Request):
         raise HTTPException(403, "插件管理需要同源访问")
     if request.headers.get("sec-fetch-site") == "cross-site":
         raise HTTPException(403, "拒绝跨站插件管理请求")
-    if auth.is_configured():
-        if not auth.is_valid_session(request.cookies.get(COOKIE_NAME, "")) and not _admin_user_session(request):
-            raise HTTPException(401, "请先登录")
-    elif _client_ip(request) not in ("127.0.0.1", "::1", "localhost") or request.url.hostname not in ("127.0.0.1", "::1", "localhost"):
-        raise HTTPException(403, "请先设置访问密码并登录，或通过本机访问安装插件")
+    if not user_store.has_users():
+        if _client_ip(request) not in ("127.0.0.1", "::1", "localhost") or request.url.hostname not in ("127.0.0.1", "::1", "localhost"):
+            raise HTTPException(403, "请先注册管理员并登录，或通过本机访问安装插件")
+        return
+    if not _admin_user_session(request):
+        raise HTTPException(401, "请先登录")
 
 
 @asynccontextmanager

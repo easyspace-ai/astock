@@ -227,38 +227,6 @@ def test_desktop_recovers_before_backend_reads_keys_and_preferences(installed, m
     assert seen == [("upgrade-test-ai-key-not-real", True)]
 
 
-def test_saved_access_password_is_restored_before_env_bootstrap(installed, monkeypatch):
-    from app import config
-    from app.services import auth
-
-    seed(installed.legacy)
-    with monkeypatch.context() as patch:
-        patch.setattr(settings, "data_dir", installed.legacy)
-        auth.set_password("old-upgrade-test-password")
-    original = (installed.legacy / "user_data" / "auth.json").read_bytes()
-    monkeypatch.setattr(auth, "_configured_cache", None)
-    monkeypatch.setattr(auth, "_sessions", {})
-    monkeypatch.setattr(config, "_ENV_FILE", installed.target / "absent.env")
-    monkeypatch.setattr(settings, "auth_password", "different-environment-test-password")
-    monkeypatch.delenv("TDX_PROBE_WORKER", raising=False)
-    monkeypatch.setattr(desktop, "_guard_streams", lambda: None)
-    monkeypatch.setattr(desktop, "_setup_logging", lambda: None)
-    monkeypatch.setattr(desktop, "_precheck_mining_lock", lambda: None)
-    monkeypatch.setattr(desktop, "_find_free_port", lambda _: 59998)
-    monkeypatch.setattr(desktop, "_wait_for_server", lambda port, timeout, done_event: done_event.wait(1))
-    seen = []
-
-    def backend(port, ready):
-        seen.append(auth.bootstrap_from_env())
-        ready.set()
-
-    monkeypatch.setattr(desktop, "_run_uvmicorn", backend)
-    monkeypatch.setattr(desktop, "_open_window", lambda _: None)
-    assert desktop.main() == 0
-    assert seen == [False]
-    assert (installed.target / "user_data" / "auth.json").read_bytes() == original
-
-
 def test_recovery_does_not_print_keys(installed, caplog):
     seed(installed.legacy)
     migrate(installed.target)

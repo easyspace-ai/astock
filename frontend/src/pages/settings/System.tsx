@@ -5,7 +5,7 @@
  */
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus, ShieldCheck, RotateCcw, ChevronDown, Layers, Upload, MemoryStick } from 'lucide-react'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, ExternalLink, ZoomIn, Minus, Plus, ShieldCheck, RotateCcw, ChevronDown, Layers, Upload, MemoryStick, Activity } from 'lucide-react'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
 import type { UpgradeGuardCategory } from '@/lib/api'
@@ -587,10 +587,142 @@ export function SettingsSystemPanel() {
         <ExtensionSlot name="settings.system.section" context={{}} compact />
       </section>
 
+      <SystemHealthCard />
+
       <UpgradeGuardCard />
     </>
   )
 }
+
+// ===== 系统健康 (可观测性) =====
+// /ready 的同一份后端快照; 外部数据源异常不算未就绪, 但会出现在这里并触发系统告警。
+function SystemHealthCard() {
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
+    queryKey: QK.systemHealth,
+    queryFn: api.systemHealth,
+    refetchInterval: 30_000,
+    retry: 1,
+  })
+
+  const ready = data?.readiness.status === 'ready'
+  const failedChecks = Object.entries(data?.readiness.checks ?? {})
+    .filter(([, check]) => !check.ok)
+    .map(([name, check]) => `${name}: ${check.detail ?? '异常'}`)
+  const sourceCounts = Object.entries(data?.sources.counts ?? {})
+    .map(([state, count]) => `${state} ${count}`)
+    .join(' · ')
+  const mb = (bytes: number | undefined) => `${((bytes ?? 0) / (1024 * 1024)).toFixed(1)} MB`
+  const errText = error instanceof Error ? error.message : String(error ?? '')
+
+  return (
+    <section className="rounded-card border border-border bg-surface p-5 mt-6">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-2">
+          <Activity className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-medium text-foreground">系统健康</h3>
+          {data && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
+              ready
+                ? 'border-success/30 text-success bg-success/10'
+                : 'border-danger/30 text-danger bg-danger/10'
+            }`}>
+              {ready ? 'ready' : 'degraded'}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn bg-elevated
+                     text-secondary hover:text-foreground text-xs transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3 w-3 ${isFetching ? 'animate-spin' : ''}`} />
+          刷新
+        </button>
+      </div>
+
+      {isLoading && <div className="text-xs text-muted">读取中…</div>}
+      {isError && (
+        <div className="text-xs text-danger">
+          系统健康接口不可用: {errText}
+          <div className="mt-1 text-[10px] text-muted">
+            需要管理员账号; 后端未启动或权限不足时会出现此提示。
+          </div>
+        </div>
+      )}
+
+      {data && (
+        <div className="space-y-2 text-xs">
+          <HealthRow
+            label="就绪状态"
+            ok={ready}
+            value={ready ? '全部内部检查通过' : '未就绪'}
+            detail={failedChecks.join('；')}
+          />
+          <HealthRow
+            label="磁盘"
+            ok={data.disk.ok}
+            value={`剩余 ${data.disk.free_gb ?? '?'} GB / ${data.disk.total_gb ?? '?'} GB (${data.disk.used_pct ?? '?'}%)`}
+            detail={`预警 ${data.disk.warn_gb} GB · 严重 ${data.disk.critical_gb} GB · ${data.disk.detail}`}
+          />
+          <HealthRow
+            label="调度器"
+            ok={data.scheduler.ok}
+            value={data.scheduler.running
+              ? `心跳 ${data.scheduler.last_heartbeat_age_s ?? '?'}s 前`
+              : '未运行'}
+            detail={data.scheduler.detail}
+          />
+          <HealthRow
+            label="文件日志"
+            ok={!data.logs.file_logging_disabled}
+            value={`backend ${mb(data.logs.backend_log.size_bytes)} · error ${mb(data.logs.error_log.size_bytes)}`}
+            detail={data.logs.file_logging_disabled
+              ? '文件日志已停用，重启前落盘证据会缺失'
+              : '写入正常；日志中已脱敏 webhook/token'}
+          />
+          <HealthRow
+            label="数据完整性"
+            ok={data.integrity.status === 'clean'}
+            value={data.integrity.pending_count == null
+              ? '状态不可读'
+              : `${data.integrity.pending_count} 条待修复`}
+            detail={data.integrity.days?.length
+              ? `最近日期: ${data.integrity.days.join(', ')}`
+              : data.integrity.detail}
+          />
+          <HealthRow
+            label="数据源"
+            ok={!Object.keys(data.sources.counts).some((s) => s === 'down')}
+            value={sourceCounts || '暂无探测状态'}
+            detail={`切换 ${data.sources.switches?.length ?? 0} 次 · 上游异常不阻塞 /ready`}
+          />
+          <div className="pt-1 text-[10px] text-muted">
+            检查时间 {data.checked_at} · 外部数据源抖动只告警，不触发容器重启。
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function HealthRow({ label, ok, value, detail }: {
+  label: string
+  ok: boolean
+  value: string
+  detail?: string
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 py-1.5 border-b border-border/40 last:border-0">
+      <div className="shrink-0 text-muted w-20">{label}</div>
+      <div className="min-w-0 flex-1 text-right">
+        <div className={ok ? 'text-foreground' : 'text-danger'}>{value}</div>
+        {detail && <div className="mt-0.5 text-[10px] text-muted truncate">{detail}</div>}
+      </div>
+    </div>
+  )
+}
+
 
 // ===== 升级保护 (二次开发) =====
 // 用户修改/新增的程序文件在每次启动时备份到 data/upgrade_guard/, 升级不丢;

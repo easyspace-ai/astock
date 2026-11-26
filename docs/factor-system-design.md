@@ -581,7 +581,7 @@ datasets:
 
 全部响应新增字段带默认值；错误响应含 `code/message/detail`，不泄漏内部栈（CONTRIBUTING 第 8 节）。SSE 进度复用现有回测 SSE 模式（长任务：批量 IC 扫描）。
 
-**鉴权**：新路由经 `api/routes.py`【现状】注册，继承应用级部署口令鉴权（`docs/deploy-password.md` 模式），不引入独立权限模型。写操作（自定义因子/复合因子/宇宙存档 CRUD）只落 `data/user_data/`，路径校验沿用策略目录的防穿越规则（CONTRIBUTING 5.1 删除策略 fail-closed 要求同样适用）。
+**鉴权**：新路由经 `api/routes.py`【现状】注册，继承邮箱账号会话与页面权限守卫（见 `docs/permission-rbac-plan.md`），不引入独立权限模型。写操作（自定义因子/复合因子/宇宙存档 CRUD）只落 `data/user_data/`，路径校验沿用策略目录的防穿越规则（CONTRIBUTING 5.1 删除策略 fail-closed 要求同样适用）。
 
 **并发**：批量 IC 扫描与复合分批量计算走 `services/heavy_job_limiter.py`【现状】限流，SSE 进度事件结构复用回测现有契约；用户取消走现有回测 worker 取消机制。
 

@@ -1,4 +1,4 @@
-"""API Token 域模块 — 外部调用方的第二认证通道 (与访问密码并行)。
+"""API Token 域模块 — 外部调用方的第二认证通道 (在邮箱账号会话之外)。
 
 设计 (docs/open-platform-plan.md §4.1):
   - 存储: data/user_data/api_tokens.json (0600), 只存 SHA-256 哈希;

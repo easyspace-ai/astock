@@ -35,7 +35,10 @@ import {
   type DataSourceItem,
   type PluginDataSourceItem,
   type Preferences,
+  type ProviderFallbacks,
   type ProviderField,
+  type SourceHealthCategory,
+  type SourceHealthEntry,
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useCapabilities, usePreferences } from '@/lib/useSharedQueries'
@@ -365,6 +368,227 @@ function CapabilityRoutingSection() {
               onSelect={(field, provider) => routeMut.mutate({ field, provider })}
             />
           ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+const HEALTH_STATE: Record<SourceHealthEntry['state'], { label: string; dot: string; text: string }> = {
+  ok:       { label: '正常', dot: 'bg-success', text: 'text-success' },
+  unknown:  { label: '待验证', dot: 'bg-muted/50', text: 'text-muted' },
+  degraded: { label: '异常', dot: 'bg-warning', text: 'text-warning' },
+  down:     { label: '不可用', dot: 'bg-danger', text: 'text-danger' },
+}
+
+function fmtTime(value: string | null | undefined): string {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleString('zh-CN', { hour12: false })
+}
+
+function fmtLag(seconds: number | null): string {
+  if (seconds == null) return '—'
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
+  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`
+  return `${(seconds / 86400).toFixed(1)}d`
+}
+
+/** 单个源: 状态点 + 延迟 + 数据时间 + 失败次数; 异常时展开错误原因。 */
+function HealthRow({ entry }: { entry: SourceHealthEntry }) {
+  const style = HEALTH_STATE[entry.state] ?? HEALTH_STATE.unknown
+  return (
+    <div className="py-2 border-t border-border/40 first:border-t-0">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${style.dot}`} />
+        <span className="text-[11px] font-medium text-foreground truncate">{entry.display || entry.provider}</span>
+        <span className={`text-[10px] shrink-0 ${style.text}`}>{style.label}</span>
+        <span className="ml-auto text-[10px] text-muted/60 tabular-nums shrink-0">
+          {entry.latency_ms != null ? `${entry.latency_ms}ms` : '—'}
+        </span>
+        <span className="text-[10px] text-muted/50 tabular-nums shrink-0 w-[52px] text-right" title="数据时间落后当前">
+          {fmtLag(entry.lag_seconds)}
+        </span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted/50">
+        <span title="最近一次探测">探测 {fmtTime(entry.checked_at)}</span>
+        <span title="数据自身时间">数据 {fmtTime(entry.data_time)}</span>
+        {entry.rows != null && <span>{entry.rows} 行</span>}
+        {entry.consecutive_fail > 0 && (
+          <span className={style.text}>连续失败 {entry.consecutive_fail} 次</span>
+        )}
+      </div>
+      {(entry.error || entry.message) && (
+        <div className={`mt-1 text-[10px] leading-relaxed ${style.text}`}>{entry.error || entry.message}</div>
+      )}
+    </div>
+  )
+}
+
+/** 主备链: 主源不可用时按链顺序切换 (仅实时行情/财务); 未配置备源保持原源。 */
+function FallbackControl({ capability, category, matrix, chain, saving, onSave }: {
+  capability: 'realtime' | 'financial'
+  category: SourceHealthCategory
+  matrix: CapabilityMatrix | undefined
+  chain: string[] | undefined
+  saving: boolean
+  onSave: (capability: 'realtime' | 'financial', chain: string[]) => void
+}) {
+  const cap = matrix?.capabilities.find(c => c.id === capability)
+  const primary = cap?.current || chain?.[0] || ''
+  const backup = chain?.[1] || ''
+  const options = category.sources.filter(s => s.provider !== primary)
+  return (
+    <div className="mt-3 pt-3 border-t border-border/40">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-[10px] text-muted/60 shrink-0">主备链</span>
+        <span className="text-[11px] text-foreground truncate">{displayOfName(matrix, primary)}</span>
+        <span className="text-[10px] text-muted/40 shrink-0">→</span>
+        <select
+          value={backup}
+          disabled={saving || options.length === 0}
+          onChange={e => {
+            const next = e.target.value
+            onSave(capability, next ? [primary, next] : [primary])
+          }}
+          className="h-7 min-w-0 max-w-[160px] rounded-btn border border-border/70 bg-surface px-2 text-[11px] text-secondary focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-50"
+        >
+          <option value="">不切换（只用主源）</option>
+          {options.map(s => (
+            <option key={s.provider} value={s.provider}>{s.display || s.provider}</option>
+          ))}
+        </select>
+        <span className="ml-auto text-[10px] text-muted/50 shrink-0">
+          {backup ? '主源异常时自动切换' : '仅告警'}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/** 数据源健康区: 定时探测结果、数据时间、连续失败、主备链与切换审计。 */
+function SourceHealthSection() {
+  const qc = useQueryClient()
+  const health = useQuery({ queryKey: QK.sourceHealth, queryFn: api.dataSourceHealth, refetchInterval: 30_000 })
+  const fallbacks = useQuery({ queryKey: QK.providerFallbacks, queryFn: api.providerFallbacks })
+  const matrix = useQuery({ queryKey: QK.capabilityMatrix, queryFn: api.capabilityMatrix })
+
+  const probe = useMutation({
+    mutationFn: () => api.probeDataSourceHealth('all'),
+    onSuccess: data => {
+      qc.setQueryData(QK.sourceHealth, data)
+      toast('探测完成', 'success')
+    },
+    onError: (e: Error) => toast(`探测失败: ${e.message}`, 'error'),
+  })
+  const saveChain = useMutation({
+    mutationFn: ({ capability, chain }: { capability: 'realtime' | 'financial'; chain: string[] }) =>
+      api.saveProviderFallbacks({ [capability]: chain } as Partial<ProviderFallbacks>),
+    onSuccess: data => {
+      qc.setQueryData(QK.providerFallbacks, data)
+      qc.invalidateQueries({ queryKey: QK.sourceHealth })
+      toast('主备链已保存', 'success')
+    },
+    onError: (e: Error) => toast(`保存失败: ${e.message}`, 'error'),
+  })
+
+  const snapshot = health.data
+  const categories = snapshot?.categories ?? []
+
+  return (
+    <section className="rounded-card border border-border bg-surface p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Radio className="h-4 w-4 text-secondary shrink-0" />
+          <h2 className="text-sm font-medium text-foreground">数据源健康</h2>
+          {snapshot?.updated_at && (
+            <span className="text-[10px] text-muted/50 shrink-0">更新于 {fmtTime(snapshot.updated_at)}</span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => probe.mutate()}
+          disabled={probe.isPending}
+          className="inline-flex h-8 items-center gap-1.5 rounded-btn border border-border/70 bg-surface px-3 text-xs font-medium text-secondary transition-colors hover:border-border hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${probe.isPending ? 'animate-spin' : ''}`} />
+          {probe.isPending ? '探测中…' : '立即探测'}
+        </button>
+      </div>
+      <p className="text-[11px] text-muted mt-1 mb-4">
+        定时探测各能力主备源的连通性与数据时间；连续失败达到阈值自动标记不可用，实时行情与财务按主备链切换并留审计。
+        日K/分钟与资讯只告警、不切换。
+      </p>
+
+      {health.isError ? (
+        <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border border-danger/20 bg-danger/5">
+          <div className="flex items-center gap-2 text-xs text-danger min-w-0">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">健康状态加载失败: {(health.error as Error)?.message || '未知错误'}</span>
+          </div>
+          <button onClick={() => health.refetch()} className="text-xs text-muted hover:text-foreground shrink-0">重试</button>
+        </div>
+      ) : health.isLoading || !snapshot ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-[150px] rounded-lg border border-border/50 bg-elevated/20 animate-pulse" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+          {categories.map(category => {
+            const style = HEALTH_STATE[category.state] ?? HEALTH_STATE.unknown
+            const activeSource = snapshot.active?.[category.id]
+            const primarySource = matrix.data?.capabilities.find(c => c.id === category.id)?.current
+            return (
+              <div key={category.id} className="rounded-lg border border-border/50 bg-elevated/20 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
+                  <span className="text-xs font-medium text-foreground">{category.label}</span>
+                  {activeSource && activeSource !== primarySource && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent/10 text-accent shrink-0">
+                      生效 {displayOfName(matrix.data, activeSource)}
+                    </span>
+                  )}
+                  <span className={`ml-auto text-[10px] ${style.text}`}>{style.label}</span>
+                </div>
+                <div className="mt-1.5">
+                  {category.sources.map(entry => <HealthRow key={entry.id} entry={entry} />)}
+                  {category.sources.length === 0 && (
+                    <div className="py-2 text-[10px] text-muted/50">暂无已声明的源</div>
+                  )}
+                </div>
+                {(category.id === 'realtime' || category.id === 'financial') && (
+                  <FallbackControl
+                    capability={category.id}
+                    category={category}
+                    matrix={matrix.data}
+                    chain={fallbacks.data?.[category.id]}
+                    saving={saveChain.isPending}
+                    onSave={(capability, chain) => saveChain.mutate({ capability, chain })}
+                  />
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {snapshot?.switches && snapshot.switches.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-border/40">
+          <div className="text-[10px] text-muted/60 mb-1.5">最近切换</div>
+          <div className="space-y-1">
+            {snapshot.switches.slice(0, 5).map((sw, i) => (
+              <div key={`${sw.at}-${i}`} className="flex flex-wrap items-center gap-x-2 text-[10px] text-muted/60">
+                <span className="tabular-nums">{fmtTime(sw.at)}</span>
+                <span className="text-foreground">{sw.capability}</span>
+                <span>{sw.from || '—'} → {sw.to}</span>
+                <span className="text-muted/40">{sw.reason}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </section>
@@ -703,6 +927,9 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
     <div className="space-y-5 max-w-5xl">
       {/* ===== 上区: 能力路由 (能力为主视图, 点标签切换提供方) ===== */}
       <CapabilityRoutingSection />
+
+      {/* ===== 数据源健康 (定时探测 / 主备切换) ===== */}
+      <SourceHealthSection />
 
       {/* ===== 下区: 数据源 (源为主视图, 配置/接入) ===== */}
       <AnchorWrap highlight={highlight} anchor="data-sources">

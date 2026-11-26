@@ -3,11 +3,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+from app.api.permissions import require_page_access
+from app.services import rbac
 
 from . import config, models, service, store
 
-router = APIRouter(prefix="/api/info", tags=["info"])
+router = APIRouter(
+    prefix="/api/info",
+    tags=["info"],
+    dependencies=[Depends(require_page_access(rbac.PAGE_ANALYSIS))],
+)
 
 
 def _svc(request: Request) -> service.InfoService:

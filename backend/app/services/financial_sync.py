@@ -43,10 +43,16 @@ def _get_symbols(data_dir: Path) -> list[str]:
         return []
 
 
+def _effective_financial_provider() -> str:
+    """当前财务生效源: 用户主源 + 健康中心主备路由。"""
+    from app.services import preferences, source_health
+
+    return source_health.resolve_provider("financial", preferences.get_financial_provider())
+
+
 def _financial_is_custom() -> bool:
     """当前财务数据源是否走 custom (用于绕过 TickFlow Expert 套餐门槛)。"""
-    from app.services import preferences
-    provider = preferences.get_financial_provider()
+    provider = _effective_financial_provider()
     if provider == "tickflow":
         return False
     from app.data_providers import custom as custom_sources
@@ -77,10 +83,9 @@ def _fetch_table(
 
     # 自定义数据源分流
     if is_custom:
-        from app.services import preferences
         from app.data_providers import custom as custom_sources
         try:
-            provider = custom_sources.get_provider(preferences.get_financial_provider())
+            provider = custom_sources.get_provider(_effective_financial_provider())
             df = provider.get_financials(table, symbols, latest_only=latest_only)
         except Exception as e:  # noqa: BLE001
             logger.warning("sync_%s custom provider failed: %s", table, e)

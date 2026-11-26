@@ -1,0 +1,27 @@
+[Unit]
+# TSP Go sidecar（AI 研判旁路，可选；仅本机 127.0.0.1:8787）
+# 安装：sudo cp packaging/systemd/aistock.service /etc/systemd/system/
+#       sudo systemctl daemon-reload && sudo systemctl enable --now aistock
+Description=TSP aistock Go sidecar
+After=network-online.target tickflow.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tsp
+Group=tsp
+WorkingDirectory=/opt/tsp/backend-go
+ExecStart=/opt/tsp/backend-go/bin/aistock-server
+Restart=on-failure
+RestartSec=3
+StartLimitBurst=5
+StartLimitIntervalSec=300
+MemoryMax=512M
+# 生产环境必须显式设置高熵随机密钥，不要使用代码内占位默认值。
+Environment=AUTH_JWT_SECRET=change-me-to-a-long-random-secret
+Environment=TZ=Asia/Shanghai
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -349,6 +349,8 @@ class KlineRepository:
         # 序列化 parquet 分区的读-改-写: 实时轮询线程、手动 refresh、盘后管道
         # 可能并发 merge/flush 同一分区文件, 无锁会互相覆盖丢数据
         self._write_lock = threading.Lock()
+        # 实时写盘被定版守卫拒绝时只记一次, 避免 3 秒轮询刷爆日志。
+        self._live_write_blocked_logged: set[tuple[str, str, str]] = set()
         # 自选/详情定向补齐的最新行。只供展示回退，不能混入全市场当日策略快照。
         self._prepared_daily_lock = threading.Lock()
         self._prepared_daily: OrderedDict = OrderedDict()
@@ -2610,6 +2612,42 @@ class KlineRepository:
         df.write_parquet(tmp)
         replace_with_retry(tmp, out)
 
+    def _live_write_reason(self, table: str, day: date) -> str | None:
+        """实时写盘守卫 (定版标记/历史日期/15:35 截止), 供 QuoteService 与写盘共用。"""
+        from app.services import finalization
+
+        return finalization.live_write_block_reason(self.store.data_dir, table, day)
+
+    def _reject_live_write(self, table: str, day: date, reason: str) -> bool:
+        key = (table, day.isoformat(), reason)
+        if key not in self._live_write_blocked_logged:
+            self._live_write_blocked_logged.add(key)
+            logger.warning(
+                "实时日K写盘已拒绝: %s %s (%s); 保留已有分区, 等待盘后管道/修补",
+                table, day, reason,
+            )
+        return True
+
+    def live_daily_write_block_reason(self, asset_type: str, day: date | None = None) -> str | None:
+        """给 QuoteService 的显式查询接口: 返回非空即应停止当日实时日K/enriched 落盘。"""
+        table = {
+            "stock": "kline_daily",
+            "index": "kline_index_daily",
+            "etf": "kline_etf_daily",
+        }.get(asset_type)
+        if not table:
+            return None
+        day = day or self._latest_live_day()
+        if day is None:
+            return None
+        return self._live_write_reason(table, day)
+
+    @staticmethod
+    def _latest_live_day() -> date | None:
+        from app.market_time import cn_today
+
+        return cn_today()
+
     def _write_daily_partition(self, df: pl.DataFrame, table: str) -> None:
         """按 date 分区写入 parquet，每个日期一个文件，支持 merge-upsert。"""
         base = self.store.data_dir / table
@@ -2716,10 +2754,74 @@ class KlineRepository:
             return
         base = self.store.data_dir / table
         dt = df["date"][0]
+        if isinstance(dt, date):
+            reason = self._live_write_reason(table, dt)
+            if reason:
+                self._reject_live_write(table, dt, reason)
+                return
         ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
         out = base / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
         self._optimistic_upsert_partition(out, df, None)
+
+    def drop_unbackfilled_live_rows(
+        self, table: str, day: date, symbols: list[str] | set[str],
+    ) -> int:
+        """官方 batch 写入后清理同分区里未被子集覆盖的实时行。
+
+        官方 batch 是权威来源: 对本次请求的标的, 如果源侧没有返回官方行,
+        不能保留盘中快照行来"凑行数"; 清掉后该 symbol 会如实表现为缺失,
+        由覆盖率检查/自检暴露。未请求的标的 (例如北交所暂不可用) 不受影响。
+        """
+        if table not in {"kline_daily", "kline_index_daily", "kline_etf_daily"}:
+            return 0
+        symbols = set(symbols)
+        if not symbols:
+            return 0
+        part = self.store.data_dir / table / f"date={day}" / "part.parquet"
+        if not part.exists():
+            return 0
+        with self._write_lock:
+            try:
+                frame = pl.read_parquet(part)
+            except Exception as exc:  # noqa: BLE001 — 读失败保持原分区, 交给自检
+                logger.warning("清理实时残留读取失败 %s %s: %s", table, day, exc)
+                return 0
+            if "quote_ts" not in frame.columns or "symbol" not in frame.columns:
+                return 0
+            stale = frame.filter(
+                pl.col("quote_ts").is_not_null() & pl.col("symbol").is_in(list(symbols))
+            )
+            if stale.is_empty():
+                return 0
+            cleaned = frame.filter(
+                ~(pl.col("quote_ts").is_not_null() & pl.col("symbol").is_in(list(symbols)))
+            )
+            self._atomic_write_parquet(cleaned.sort(["symbol", "date"]), part)
+        logger.info(
+            "官方日K覆盖: %s %s 清理 %d 条未被子集覆盖的实时行",
+            table, day, stale.height,
+        )
+        return stale.height
+
+    def drop_unbackfilled_live_rows_range(
+        self, table: str, start: date, end: date, symbols: list[str] | set[str],
+    ) -> int:
+        """对 [start, end] 内已存在的分区逐个清理未覆盖实时行。"""
+        if start > end:
+            return 0
+        base = self.store.data_dir / table
+        if not base.exists():
+            return 0
+        total = 0
+        for part in base.glob("date=*"):
+            try:
+                day = date.fromisoformat(part.name[5:])
+            except ValueError:
+                continue
+            if start <= day <= end:
+                total += self.drop_unbackfilled_live_rows(table, day, symbols)
+        return total
 
     def _with_instrument_metadata(self, asset_type: str, df: pl.DataFrame) -> pl.DataFrame:
         """补齐实时内存缓存所需的维表字段；这些字段不会写入 enriched 分区。"""
@@ -2755,6 +2857,12 @@ class KlineRepository:
             existing_cache = self._index_enriched_cache if self._index_enriched_cache_date == dt else pl.DataFrame()
         else:
             return
+
+        if isinstance(dt, date):
+            reason = self._live_write_reason(table, dt)
+            if reason:
+                self._reject_live_write(table, dt, reason)
+                return
 
         cache_df = self._with_instrument_metadata(asset_type, df)
         merged_cache = cache_df
@@ -2807,6 +2915,11 @@ class KlineRepository:
             return
         base = self.store.data_dir / table
         dt = df["date"][0]
+        if isinstance(dt, date):
+            reason = self._live_write_reason(table, dt)
+            if reason:
+                self._reject_live_write(table, dt, reason)
+                return
         ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
         out = base / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -2836,6 +2949,12 @@ class KlineRepository:
             table = "kline_index_enriched"
         else:
             return
+
+        if isinstance(dt, date):
+            reason = self._live_write_reason(table, dt)
+            if reason:
+                self._reject_live_write(table, dt, reason)
+                return
 
         from app.indicators.pipeline import ENRICHED_STORAGE_COLS
         storage_cols = [c for c in ENRICHED_STORAGE_COLS if c in df.columns]

@@ -107,6 +107,24 @@ class HealthWatchdog:
             self._task = None
 
 
+def _exit_with_alert(code: int) -> None:
+    """退出前尽力发一条系统告警, 让值班人知道是 watchdog 主动杀进程, 不是普通宕机。"""
+    try:
+        from app.services.system_alert import emit
+
+        emit(
+            "watchdog_exit", "critical", "后端僵死, 看门狗主动退出",
+            f"watchdog 连续探测失败达到阈值, 以退出码 {code} 结束进程，"
+            "等待 supervisor/Docker 拉起；请检查 backend.log 中 watchdog probe failed 堆栈",
+            dedupe_key="watchdog",
+            data={"exit_code": code},
+            sync_wait_s=3.0,
+        )
+    except Exception:  # noqa: BLE001 — 退出前不得因告警失败卡住
+        logger.exception("watchdog 退出告警发送失败")
+    os._exit(code)
+
+
 def start_watchdog(app_state, repo) -> HealthWatchdog | None:
     """lifespan 启动钩子; 返回实例挂到 app.state.watchdog 便于关闭。"""
     if not settings.watchdog_enabled:
@@ -114,7 +132,7 @@ def start_watchdog(app_state, repo) -> HealthWatchdog | None:
     write_lock = getattr(repo, "_write_lock", None)
     watchdog = HealthWatchdog(
         lambda: default_probe(write_lock),
-        exit_cb=lambda code: os._exit(code),
+        exit_cb=_exit_with_alert,
     )
     watchdog.start()
     return watchdog

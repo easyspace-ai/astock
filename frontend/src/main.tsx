@@ -15,6 +15,7 @@ import { createAppPersister, shouldPersistQuery, PERSIST_BUSTER } from './lib/qu
 import { hydrateUiPrefs } from './lib/uiPrefs'
 import { applyPageZoom, getPageZoom } from './lib/pageZoom'
 import { applyTheme, getTheme } from './lib/theme'
+import { RootErrorBoundary } from './components/RootErrorBoundary'
 // 字体自托管 (@fontsource): 替代 rsms.me / Google Fonts 渲染阻塞外链,
 // 内网/离线部署不再白屏等字体。权重覆盖 tailwind 全部用量 (300-900)。
 import '@fontsource/inter/300.css'
@@ -28,6 +29,14 @@ import '@fontsource/jetbrains-mono/500.css'
 import '@fontsource/jetbrains-mono/600.css'
 import '@fontsource/jetbrains-mono/700.css'
 import './index.css'
+
+// 全局兜底: 异步红线/资源加载错误不会被 ErrorBoundary 捕获, 至少留下可复制日志。
+window.addEventListener('error', (event) => {
+  console.error('[TSP] window error', event.error ?? event.message)
+})
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('[TSP] unhandled rejection', event.reason)
+})
 
 // 全局认证拦截: 任何 query/mutation 收到 401 (未登录/会话过期) → 跳登录页。
 // api.ts 的 request() 已对 401 静默 (不弹 toast), 这里统一负责跳转。
@@ -94,7 +103,9 @@ async function bootstrap() {
           dehydrateOptions: { shouldDehydrateQuery: shouldPersistQuery },
         }}
       >
-        <RouterProvider router={router} />
+        <RootErrorBoundary>
+          <RouterProvider router={router} />
+        </RootErrorBoundary>
       </PersistQueryClientProvider>
     </React.StrictMode>,
   )

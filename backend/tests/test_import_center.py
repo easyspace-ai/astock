@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from app.api import import_center
 from app.config import settings
 from app.data_providers.custom import loader
-from app.services import auth, config_backup
+from app.services import config_backup
 
 
 def archive(files: dict) -> bytes:
@@ -28,7 +28,6 @@ def archive(files: dict) -> bytes:
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path)
-    monkeypatch.setattr(auth, "is_configured", lambda: False)
     monkeypatch.setattr(loader, "plugins_dir", lambda: tmp_path / "builtins")
     app = FastAPI()
     app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))

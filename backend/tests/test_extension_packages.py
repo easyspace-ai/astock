@@ -254,9 +254,9 @@ def test_startup_cannot_overwrite_a_concurrent_management_change(tmp_path, monke
 def test_runtime_frontend_uses_existing_page_distribution_and_management_auth(tmp_path, monkeypatch):
     from app.api.ext_pages import router as pages_router
     from app.api.import_center import router
-    from app.services import auth
+    from app.services import user_store
 
-    monkeypatch.setattr(auth, "is_configured", lambda: False)
+    monkeypatch.setattr(user_store, "has_users", lambda: False)
     store = ExtensionPackageStore(tmp_path)
     install(store, bundle())
     app, _ = boot(tmp_path)
@@ -298,6 +298,6 @@ with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) a
     assert client.get("/api/extensions/demo.research/status").json() == {"version": "1.0.0"}
 """
     env = {**os.environ, "DATA_DIR": str(tmp_path), "STATIC_DIR": str(static_dir), "TICKFLOW_API_KEY": "", "AI_API_KEY": "",
-           "AUTH_PASSWORD": "", "WATCHDOG_ENABLED": "false", "BACKTEST_MATRIX_CACHE_PREWARM": "false"}
+           "WATCHDOG_ENABLED": "false", "BACKTEST_MATRIX_CACHE_PREWARM": "false"}
     result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr[-3000:]

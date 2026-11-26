@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.tickflow import client as tf_client
@@ -75,6 +76,31 @@ def health() -> dict:
         "mode": tf_client.current_mode(),
         "memory": _memory_snapshot(),
     }
+
+
+@router.get("/ready")
+def ready(request: Request):
+    """就绪探针: 只检查内部可服务能力, 外部数据源抖动不影响容器存活。
+
+    Docker healthcheck 用 503 判定未就绪; 失败项写在 checks 里, 不返回堆栈或路径。
+    """
+    from app.services.system_health import readiness_report
+
+    report = readiness_report(getattr(request.app, "state", None))
+    status_code = 200 if report.get("status") == "ready" else 503
+    # /ready 是公开探针: 只暴露每项是否通过 + 粗粒度原因, 不返回磁盘容量/路径。
+    checks = {
+        name: {"ok": bool(check.get("ok")), "detail": check.get("detail")}
+        for name, check in (report.get("checks") or {}).items()
+    }
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": report.get("status"),
+            "checked_at": report.get("checked_at"),
+            "checks": checks,
+        },
+    )
 
 
 @router.get("/api/capabilities")

@@ -83,12 +83,11 @@ _CATEGORY_LABELS: dict[str, str] = {
     "history": "历史记录",
     "preferences": "偏好设置",
     "secrets": "密钥",
-    "auth": "访问凭证",
 }
 # 全部类别键 (导出/导入按类别勾选的合法值域)。
 CATEGORY_KEYS = frozenset(_CATEGORY_LABELS)
 # 敏感类别: 默认不导出 (UI 单独警示)。
-SENSITIVE_CATEGORIES = frozenset({"secrets", "auth"})
+SENSITIVE_CATEGORIES = frozenset({"secrets"})
 # 与 api/settings.py 的 _SOUND_PACK_EXTS 保持一致 (service 不反向依赖 api 层)。
 _SOUND_PACK_EXTS = frozenset({".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".opus", ".webm"})
 # 结果输出顺序 = 重要性顺序 (策略 → 监控 → …, 敏感类别放末尾)。
@@ -112,7 +111,6 @@ _CATEGORY_ORDER = (
     "history",
     "preferences",
     "secrets",
-    "auth",
 )
 
 # 文件名白名单: 字母/数字/下划线/连字符 (含中文), 不允许 `.` 开头、路径分隔符。
@@ -206,8 +204,6 @@ def _classify(rel: PurePosixPath, data_dir: Path) -> tuple[str, Path] | None:
             return "strategy_pool", data_dir / "user_data" / name
         if name == "secrets.json":
             return "secrets", data_dir / "user_data" / "secrets.json"
-        if name == "auth.json":
-            return "auth", data_dir / "user_data" / "auth.json"
         if name in ("watchlist.parquet", "watchlist_groups.json"):
             return "watchlist", data_dir / "user_data" / name
         if name == "research_candidates.json":
@@ -271,7 +267,7 @@ def _collect_backup_files(data_dir: Path) -> list[Path]:
     _glob(data_dir / "user_data" / "lots", "lot_*.json")
     for name in (
         "watchlist.parquet", "watchlist_groups.json", "preferences.json",
-        "research_candidates.json", "alerts.jsonl", "assistant_sessions.json", "auth.json", "strategy_pool.json",
+        "research_candidates.json", "alerts.jsonl", "assistant_sessions.json", "strategy_pool.json",
     ):
         p = data_dir / "user_data" / name
         if p.is_file():
@@ -413,7 +409,7 @@ def build_backup(*, categories: Iterable[str] | None = None) -> tuple[bytes, str
             category, _ = _classify(PurePosixPath(rel), data_dir)  # collect 已过滤, 必非 None
             if selected is not None and category not in selected:
                 continue
-            # 敏感类别 (密钥/访问凭证) 只在显式勾选时打包, 默认导出不带。
+            # 敏感类别 (密钥) 只在显式勾选时打包, 默认导出不带。
             if category in SENSITIVE_CATEGORIES and not (
                 selected is not None and category in selected
             ):
@@ -763,12 +759,6 @@ def apply_archive(data: bytes, *, allow_overwrite: bool = False, categories: Ite
         # 导入完成即知道定义能不能算, 不用等回测报错才发现。
         if entry.category in ("custom_signals", "custom_factors"):
             _result(entry.category).setdefault("smoke", []).append(_smoke_entry(entry, payload))
-
-    # auth.json 是外部写入的凭证文件, 进程内密码/会话缓存需要重读。
-    if results.get("auth", {}).get("imported"):
-        from app.services import auth as auth_store
-
-        auth_store.invalidate_runtime_caches()
 
     # 偏好/密钥最后落: merge 语义 (备份键覆盖本地同名键, 本地新增键保留),
     # 走各 store 的 save (自带锁、0600 与缓存失效)。

@@ -419,6 +419,31 @@ def get_financial_provider() -> str:
     return _validated_provider(provider, "financial_data_provider")
 
 
+def data_dir() -> Path:
+    """当前数据目录 (system-level, 不随账号隔离)。"""
+    from app.config import settings
+
+    return settings.data_dir
+
+
+def get_provider_fallbacks(capability: str, primary: str = "") -> list[str]:
+    """读取某能力的有序主备链; 未配置时只返回主源。
+
+    只做展示/路由的软校验: 非法或已卸载的源仍由 _validated_provider 在
+    真正取数时兜底, 这里不抛错, 避免把损坏配置变成页面 500。
+    """
+    raw = load().get("provider_fallbacks") or {}
+    chain = raw.get(capability) if isinstance(raw, dict) else None
+    if not isinstance(chain, list):
+        return [primary] if primary else []
+    names = [str(name).lower() for name in chain if isinstance(name, str) and name.strip()]
+    if primary:
+        # 主源可能被能力路由改过; 读取时以当前主源为准重排, 避免旧主源占住链首。
+        names = [name for name in names if name != primary]
+        names.insert(0, primary)
+    return names
+
+
 # ===== 盘后管道拉取内容开关 (A股 / ETF / 指数 独立控制) =====
 
 def get_pipeline_pull_a_share() -> bool:
@@ -633,23 +658,30 @@ def set_pipeline_index_symbols(symbols: str) -> str:
 
 
 def get_pipeline_schedule() -> dict:
-    """返回盘后管道调度时间 {"hour": 15, "minute": 35}。
+    """返回盘后管道调度时间 {"hour": 16, "minute": 40}。
 
-    默认 15:35 而非 15:30 整: 盘后固定价交易 15:30 才彻底结束, 且供应商
-    聚合含盘后量的官方日K需要时间 —— 整点即拉可能写入不含盘后成交的
-    日线, 也与 quote 定版重试窗口终点 (15:30) 精确重合。留 5 分钟缓冲。
+    默认 16:40: 数据源当日(T+0)官方日K在 15:35 尚未发布, 线上 2026-11-23/24
+    连续两天 15:35、15:40、16:10 均返回 0 行, 16:40 才拿到当日官方批次。
+    15:30 盘后固定价交易结束后仍留出充足定稿缓冲; 实时写盘截止仍为 15:35,
+    这段窗口只更新展示缓存, 不落 kline_daily。
     """
-    d = load().get("pipeline_schedule", {"hour": 15, "minute": 35})
-    return {"hour": d.get("hour", 15), "minute": d.get("minute", 35)}
+    d = load().get("pipeline_schedule")
+    if d:
+        h = int(d.get("hour", 16))
+        m = int(d.get("minute", 40))
+        if h * 60 + m >= 16 * 60 + 30:
+            return {"hour": h, "minute": m}
+    # 旧的 15:35 偏好自动迁移到新默认, 避免升级后继续在源发布前空跑。
+    return {"hour": 16, "minute": 40}
 
 
 def set_pipeline_schedule(hour: int, minute: int) -> dict:
     h = max(0, min(23, hour))
     m = max(0, min(59, minute))
-    # 盘后管道不早于 15:35: 15:30 盘后固定价才终止 (量/额此前仍会变),
-    # 且供应商官方日线定稿需要缓冲 —— 更早启动可能固化不含盘后量的当日分区
-    if h * 60 + m < 15 * 60 + 35:
-        h, m = 15, 35
+    # 盘后管道不早于 16:30: 供应商 T+0 官方日K在 15:35 尚未发布; 16:30 前启动
+    # 只会拿到 0 行并产生无效 pipeline_failed, 还可能提前固化未定稿数据。
+    if h * 60 + m < 16 * 60 + 30:
+        h, m = 16, 40
     save({"pipeline_schedule": {"hour": h, "minute": m}})
     return {"hour": h, "minute": m}
 
@@ -738,17 +770,17 @@ PUSH_CHANNELS = {"feishu", "wecom", "custom", "email"}
 
 
 def get_review_schedule() -> dict:
-    """定时复盘调度 {"enabled": False, "hour": 15, "minute": 40}。默认关闭。
+    """定时复盘调度 {"enabled": False, "hour": 16, "minute": 45}。默认关闭。
 
-    默认 15:40: 盘后管道默认 15:35 启动, 留 5 分钟缓冲, 复盘使用管道
+    默认 16:45: 盘后管道默认 16:40 启动, 留 5 分钟缓冲, 复盘使用管道
     产出的最终口径数据 (含盘后量校正的日K/enriched)。强制下限 15:00 —
     偏好收盘后即时复盘 (走实时快照缓存, 不等管道) 的用户可自行调早。
     """
-    d = load().get("review_schedule", {"enabled": False, "hour": 15, "minute": 40})
+    d = load().get("review_schedule", {"enabled": False, "hour": 16, "minute": 45})
     return {
         "enabled": bool(d.get("enabled", False)),
-        "hour": d.get("hour", 15),
-        "minute": d.get("minute", 40),
+        "hour": d.get("hour", 16),
+        "minute": d.get("minute", 45),
     }
 
 

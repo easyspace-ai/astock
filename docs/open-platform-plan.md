@@ -31,7 +31,7 @@
 | **环境数据生产** | regime_builder 的市场状态计算与盘后增量（回测/挖掘/因子归因/AI 四处消费同一口径） | `services/regime_builder`、盘后管道 |
 | **监控与推送管道** | 规则引擎、SSE/语音/系统通知/Webhook/留痕五通道 | `services/quote_service`、`api/monitor-rules` `api/alerts` |
 | **扩展数据存储** | 扩展表 CRUD、时序分区/快照、市场级表(market_level)、rows/values 查询出口 | `services/ext_data` `ext_pull`、`api/ext-data` |
-| **认证与配置** | 访问密码（本机/内网 UI）、**API Token 与 scope（本方案新增）**、secrets | `services/auth`、`api/settings` |
+| **认证与配置** | 邮箱账号会话（本机/内网 UI）、**API Token 与 scope（本方案新增）**、secrets | `services/user_store`、`api/settings` |
 
 ### 2.2 扩展域（通过既有机制接入, 核心只暴露契约）
 
@@ -68,8 +68,8 @@
 ### 4.1 Token 体系
 
 - 存储沿用 secrets 模式: `data/user_data/tokens.json`（chmod 0600）: `{id, name, token_hash, scopes, created_at, last_used_at, revoked}`; 明文 Token 只在创建响应中出现一次（前缀 `tsp_` + 32 字节随机 hex）。
-- 认证通道与现有单密码**并行不替代**: 本机/内网 UI 登录照旧; `Authorization: Bearer tsp_...` 是外部调用方专用第二通道。
-- 中间件顺序: 访问密码门 → Token 识别（有 Bearer 头则走 Token 路径, 免密码会话）→ scope 校验 → 限流。
+- 认证通道与邮箱账号会话**并行不替代**: 本机/内网 UI 登录照旧; `Authorization: Bearer tsp_...` 是外部调用方专用第二通道。
+- 中间件顺序: `/api/accounts/*` 白名单 → Token 识别（有 Bearer 头则走 Token 路径, 免账号会话）→ scope 校验 → 限流 → 邮箱账号会话 → 页面/权限守卫。
 
 ### 4.2 Scope 矩阵（最小够用, 宁少勿滥）
 
@@ -149,7 +149,7 @@
 | 端点 | 说明 |
 |---|---|
 | `GET /api/health` | 探活（无鉴权, 白名单已有） |
-| `GET /api/auth/api-tokens`（UI 会话） | Token 管理: 列表/创建/吊销（管理页, 不属于开放面） |
+| `GET /api/settings/api-tokens`（UI 会话） | Token 管理: 列表/创建/吊销（管理页, 不属于开放面） |
 | `GET /api/openapi.json?tier=a` | Tier A 契约视图（机器可读） |
 
 ### 5.7 通用约定

@@ -6,8 +6,11 @@ data_dir 取自 request.app.state.repo.store.data_dir (与 paper_execution 同�
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.api.permissions import require_page_access
+from app.services import rbac
 
 from . import service
 from .client import CninfoClient
@@ -20,7 +23,11 @@ class TrackedSymbolsRequest(BaseModel):
 
 
 def build_router() -> APIRouter:
-    router = APIRouter(prefix="/api/graph", tags=["company-graph"])
+    router = APIRouter(
+        prefix="/api/graph",
+        tags=["company-graph"],
+        dependencies=[Depends(require_page_access(rbac.PAGE_ANALYSIS))],
+    )
 
     def _data_dir(request: Request):
         return request.app.state.repo.store.data_dir

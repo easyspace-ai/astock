@@ -35,18 +35,28 @@ export function PersonalSettings() {
   const [sendingCode, setSendingCode] = useState(false)
   const [verifying, setVerifying] = useState(false)
 
+  const logout = async () => {
+    try { await api.accountLogout() } catch { /* 会话可能已失效 */ }
+    qc.clear()
+    navigate('/login', { replace: true })
+  }
+
   if (me.isLoading) {
     return <div className="px-5 py-10 text-sm text-muted">加载中…</div>
   }
 
-  // 旧访问密码模式：没有邮箱账号，只保留退出。
+  // 账号信息读取失败: 不猜测身份, 只提供退出。
   if (!me.data) {
     return (
       <>
-        <PageHeader title="个人中心" subtitle="当前部署使用访问密码登录，尚未启用邮箱账号。" className="pl-14 md:pl-5" />
+        <PageHeader title="个人中心" subtitle="无法读取当前账号信息。" className="pl-14 md:pl-5" />
         <div className="px-4 py-6 sm:px-8">
-          <div className="max-w-xl rounded-card border border-border bg-surface p-5 text-sm text-secondary">
-            这是一个单用户部署。邮箱账号、个人资料与密码管理需要管理员在服务端启用多用户账号体系。
+          <div className="flex max-w-xl items-center justify-between gap-4 rounded-card border border-border bg-surface p-5 text-sm text-secondary">
+            <span>请重新登录后再试；若持续失败，请联系管理员检查账号服务。</span>
+            <button type="button" onClick={logout}
+              className="shrink-0 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90">
+              退出登录
+            </button>
           </div>
         </div>
       </>
@@ -109,13 +119,6 @@ export function PersonalSettings() {
     } finally {
       setVerifying(false)
     }
-  }
-
-  const logout = async () => {
-    try { await api.accountLogout() } catch { /* 会话可能已失效 */ }
-    try { await api.authLogout() } catch { /* 兼容旧密码会话 */ }
-    qc.clear()
-    navigate('/login', { replace: true })
   }
 
   return (

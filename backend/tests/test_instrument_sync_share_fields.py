@@ -169,3 +169,30 @@ def test_only_paid_metadata_can_supply_todays_price_limits(tmp_path, monkeypatch
     assert row["limit_up"] == (6.50 if current_limits else None)
     assert row["limit_down"] == (5.32 if current_limits else None)
     assert row["float_shares"] == 765140730.0
+
+
+def test_partial_exchange_failure_keeps_existing_symbols(tmp_path, monkeypatch):
+    """单个交易所 503 时不能把维表缩成剩余交易所的子集。"""
+    from types import SimpleNamespace
+
+    from app.tickflow import client
+
+    _write_existing(tmp_path)
+    item = {"symbol": "600000.SH", "name": "浦发银行", "ext": {}}
+
+    def _get_instruments(ex, instrument_type="stock"):
+        if ex == "SZ":
+            raise RuntimeError("503 Service Unavailable")
+        if ex == "SH":
+            return [item]
+        return []
+
+    monkeypatch.setattr(isync, "_fetch_instruments_via_provider", lambda: None)
+    monkeypatch.setattr(isync, "get_client", lambda: SimpleNamespace(
+        exchanges=SimpleNamespace(get_instruments=_get_instruments),
+    ))
+    monkeypatch.setattr(client, "current_mode", lambda: "free")
+
+    assert isync.sync_instruments(tmp_path) == 2
+    df = pl.read_parquet(tmp_path / "instruments" / "instruments.parquet")
+    assert set(df["symbol"].to_list()) == {"600000.SH", "000001.SZ"}

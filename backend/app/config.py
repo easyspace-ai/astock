@@ -214,6 +214,25 @@ class Settings(BaseSettings):
     watchdog_probe_timeout_s: float = 15.0
     watchdog_failure_threshold: int = 2
 
+    # 运维可观测性 — 系统级告警、磁盘水位与请求错误阈值。
+    # 告警只写本地 alert_store/SSE, 并在已配置的飞书/企业微信/自定义 Webhook
+    # 上额外推送; 默认开启, 冷却窗口避免同一故障刷屏。
+    ops_alert_enabled: bool = True
+    ops_alert_cooldown_s: int = 1800
+    ops_disk_warn_gb: float = 10.0
+    ops_disk_critical_gb: float = 2.0
+    ops_disk_check_interval_s: float = 300.0
+    # 磁盘/日志/完整性/调度器统一巡检周期。readiness 由 Docker 每 30s 探一次,
+    # 运维线程 60s 一次保证系统级告警不会延迟到 5 分钟。
+    ops_monitor_interval_s: float = 60.0
+    ops_http_5xx_window_s: int = 300
+    ops_http_5xx_threshold: int = 5
+    # 文件日志保留规模。backend.log 记录业务 + HTTP 访问; error.log 只记 ERROR+。
+    log_file_max_mb: int = 20
+    log_file_backup_count: int = 5
+    error_log_max_mb: int = 20
+    error_log_backup_count: int = 5
+
     # 策略批量执行 (run_all / 策略页全量跑) 的并发 worker 上限。实测 2026-09-07:
     # polars eager 操作内部已多线程并行, 外层再并发 4 worker 属超订, 41 策略
     # 299.6s 慢于串行 — 默认 1 (串行)。保留开关供配合 POLARS_MAX_THREADS 调优实验。
@@ -233,10 +252,6 @@ class Settings(BaseSettings):
     aistock_url: str = "http://127.0.0.1:8787"
     # 反代读超时（秒）：SSE 流式 / W6 长预取 / 多空辩论长链路，给足余量。
     aistock_proxy_read_timeout: float = 2700.0
-
-    # Auth — 首次启动时预置访问密码(明文, 仅用于初始化, 详见 services/auth.bootstrap_from_env)
-    # 公网服务器部署时免去 SSH 端口转发设密码的麻烦。写入 auth.json(哈希)后即不再读取。
-    auth_password: str = ""
 
     # 多用户账号体系 — 首次启动时用环境变量创建管理员账号 (仅当用户表为空时生效)。
     # ADMIN_EMAIL + ADMIN_PASSWORD 同时配置才创建; 之后由管理员在账号体系内管理。
@@ -275,6 +290,23 @@ class Settings(BaseSettings):
             raise ValueError("watchdog intervals must be positive")
         if self.watchdog_failure_threshold < 1:
             raise ValueError("watchdog_failure_threshold must be >= 1")
+        if self.ops_alert_cooldown_s < 0:
+            raise ValueError("ops_alert_cooldown_s must be >= 0")
+        if self.ops_disk_critical_gb <= 0 or self.ops_disk_warn_gb <= self.ops_disk_critical_gb:
+            raise ValueError("ops_disk_warn_gb must be greater than ops_disk_critical_gb")
+        if self.ops_disk_check_interval_s <= 0:
+            raise ValueError("ops_disk_check_interval_s must be positive")
+        if self.ops_monitor_interval_s <= 0:
+            raise ValueError("ops_monitor_interval_s must be positive")
+        if self.ops_http_5xx_window_s <= 0 or self.ops_http_5xx_threshold < 1:
+            raise ValueError("ops http 5xx window/threshold must be positive")
+        if min(
+            self.log_file_max_mb,
+            self.log_file_backup_count,
+            self.error_log_max_mb,
+            self.error_log_backup_count,
+        ) < 1:
+            raise ValueError("log rotation sizes/counts must be >= 1")
         if self.strategy_run_all_workers < 1:
             raise ValueError("strategy_run_all_workers must be >= 1")
         if self.strategy_run_all_first_return_s < 0:

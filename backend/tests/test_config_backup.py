@@ -439,14 +439,13 @@ def test_inspect_reports_counts_conflicts_and_secrets(src_env):
     data, _ = config_backup.build_backup(categories=config_backup.CATEGORY_KEYS)
     summary = config_backup.inspect_archive(data)
     assert summary["has_secrets"] is True
-    # 23 个常规配置文件 + secrets + auth
-    assert summary["total_files"] == 25
-    assert summary["conflict_files"] == 25 - 2  # 除偏好/密钥 (merge 语义) 外全部同名冲突
+    # 24 个常规配置文件 + secrets (auth.json 已随旧密码模式下线, 不再备份)
+    assert summary["total_files"] == 24
+    assert summary["conflict_files"] == 24 - 2  # 除偏好/密钥 (merge 语义) 外全部同名冲突
     cats = {c["key"]: c for c in summary["categories"]}
     assert cats["strategies"]["count"] == 3
     assert cats["strategies"]["conflicts"] == 3
     assert cats["preferences"]["conflicts"] == 0
-    assert cats["auth"]["count"] == 1
 
 
 def test_reject_invalid_archives(src_env):
@@ -530,7 +529,6 @@ def test_apply_into_fresh_env_roundtrip(src_env, tmp_path_factory, monkeypatch):
     assert imported["watchlist"] == 2
     assert imported["preferences"] == 1
     assert imported["secrets"] == 1
-    assert imported["auth"] == 1
     assert imported["lots"] == 1
     assert imported["paper"] == 3
     assert imported["research_candidates"] == 1
@@ -696,14 +694,15 @@ def test_apply_category_selection(src_env, tmp_path_factory, monkeypatch):
 
 
 def test_sensitive_categories_require_explicit_selection(src_env):
-    """密钥/访问凭证只在显式勾选时导出; 显式勾选 auth 时带上 auth.json。"""
+    """密钥只在显式勾选时导出; 旧 auth.json 已下线, 任何类别都不再打包。"""
     default = _zip_entries(config_backup.build_backup()[0])
     assert "user_data/auth.json" not in default
     assert "user_data/secrets.json" not in default
 
-    data, _ = config_backup.build_backup(categories={"auth"})
+    data, _ = config_backup.build_backup(categories={"secrets"})
     entries = _zip_entries(data)
-    assert set(entries) == {"manifest.json", "user_data/auth.json"}
+    assert "user_data/secrets.json" in entries
+    assert "user_data/auth.json" not in entries
 
     # 导入端: 嵌套白名单外的伪造条目仍被拒绝
     out = io.BytesIO()

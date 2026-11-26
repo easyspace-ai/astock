@@ -31,7 +31,7 @@ const extension = {
   },
 }
 const backup = { kind: 'backup', preview: { created_at: '2026-11-01', app_version: '0.3.25', has_secrets: true, total_files: 3, conflict_files: 0, out_of_scope_files: 0,
-  categories: [{ key: 'watchlist', label: '自选股', count: 1, conflicts: 0 }, { key: 'secrets', label: '密钥', count: 1, conflicts: 0 }, { key: 'auth', label: '访问凭证', count: 1, conflicts: 0 }] } }
+  categories: [{ key: 'watchlist', label: '自选股', count: 1, conflicts: 0 }, { key: 'secrets', label: '密钥', count: 1, conflicts: 0 }] } }
 let root: Root
 let qc: QueryClient
 const node = document.createElement('div')
@@ -93,15 +93,14 @@ it('previews a data source Markdown description before installation', async () =
   expect(mocks.source).not.toHaveBeenCalled()
 })
 
-it('each backup operation starts without keys/passwords and applies only explicitly selected categories', async () => {
+it('each backup operation starts without keys and applies only explicitly selected categories', async () => {
   mocks.inspect.mockResolvedValue(backup)
   await render(); await pick('backup.zip')
   const secret = () => node.querySelector<HTMLInputElement>('[aria-label="恢复密钥"]')!
-  const auth = () => node.querySelector<HTMLInputElement>('[aria-label="恢复访问凭证"]')!
-  expect(secret().checked).toBe(false); expect(auth().checked).toBe(false)
-  await click(secret()); await click(auth())
+  expect(secret().checked).toBe(false)
+  await click(secret())
   await click(button('重新选择文件')); await pick('other-backup.zip')
-  expect(secret().checked).toBe(false); expect(auth().checked).toBe(false)
+  expect(secret().checked).toBe(false)
   await click(node.querySelector<HTMLInputElement>('[aria-label="信任备份来源"]')!)
   await click(button('恢复所选配置'))
   expect(mocks.backup).toHaveBeenCalledWith(expect.any(File), false, ['watchlist'])

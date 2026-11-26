@@ -155,7 +155,7 @@ def test_distinct_heavy_requests_are_bounded_and_health_stays_available(client):
 def test_shared_completed_autoloads_do_not_consume_submission_budget(client, monkeypatch):
     http, engine, _ = client
     monkeypatch.setattr(metrics, "submissions", metrics.SubmissionLimiter(limit=1))
-    http.cookies.set("tf_session", "isolated-test-session")
+    http.cookies.set("tf_user_session", "isolated-test-session")
     for _ in range(5):
         assert http.post("/api/screener/run_all", json=body()).status_code == 200
     assert engine.calls == ["0"]
@@ -177,16 +177,20 @@ def test_preset_views_share_results_and_manual_rerun_bypasses_completed_cache(cl
 
 
 def test_workload_diagnostics_inherit_panel_authentication(client, monkeypatch):
-    from app.services import auth
+    from app.services import user_store
 
     http, _, _ = client
     app = FastAPI()
     app.middleware("http")(auth_middleware)
     app.include_router(data.router)
     app.state.repo = http.app.state.repo
-    monkeypatch.setattr(auth, "is_configured", lambda: True)
-    monkeypatch.setattr(auth, "is_valid_session", lambda token: token == "valid-test-session")
+    monkeypatch.setattr(user_store, "has_users", lambda: True)
+    monkeypatch.setattr(
+        user_store, "get_user_by_token",
+        lambda token: {"id": 1, "is_active": True} if token == "valid-test-session" else None,
+    )
+    monkeypatch.setattr(user_store, "user_permissions", lambda _user: frozenset({"admin.data_manage"}))
     with TestClient(app) as protected:
         assert protected.get("/api/data/workload").status_code == 401
-        protected.cookies.set("tf_session", "valid-test-session")
+        protected.cookies.set("tf_user_session", "valid-test-session")
         assert protected.get("/api/data/workload").status_code == 200

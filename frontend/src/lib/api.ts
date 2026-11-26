@@ -2325,6 +2325,105 @@ export interface DataSourcesResponse {
   config_dir: string
 }
 
+export interface SourceHealthEntry {
+  id: string
+  category: string
+  provider: string
+  display: string
+  state: 'ok' | 'unknown' | 'degraded' | 'down'
+  message: string | null
+  checked_at: string | null
+  latency_ms: number | null
+  rows: number | null
+  data_time: string | null
+  lag_seconds: number | null
+  error: string | null
+  consecutive_fail: number
+  cooldown_until: string | null
+  success_count: number
+}
+
+export interface SourceHealthCategory {
+  id: string
+  label: string
+  state: 'ok' | 'unknown' | 'degraded' | 'down'
+  sources: SourceHealthEntry[]
+}
+
+export interface SourceHealthSwitch {
+  at: string
+  capability: string
+  from: string | null
+  to: string
+  reason: string
+}
+
+export interface SourceHealthSnapshot {
+  version: number
+  updated_at: string | null
+  categories: SourceHealthCategory[]
+  targets: SourceHealthEntry[]
+  switches: SourceHealthSwitch[]
+  active: Record<string, string>
+}
+
+export interface SystemHealthCheck {
+  ok: boolean
+  detail?: string
+  [key: string]: unknown
+}
+
+export interface SystemHealthSnapshot {
+  checked_at: string
+  readiness: {
+    status: 'ready' | 'degraded'
+    checked_at: string
+    checks: Record<string, SystemHealthCheck>
+  }
+  disk: {
+    ok: boolean
+    detail: string
+    total_gb: number | null
+    free_gb: number | null
+    used_pct: number | null
+    warn_gb: number
+    critical_gb: number
+  }
+  logs: {
+    ok: boolean
+    file_logging_disabled: boolean
+    backend_log: { exists: boolean; size_bytes: number; mtime: number | null }
+    error_log: { exists: boolean; size_bytes: number; mtime: number | null }
+  }
+  scheduler: {
+    ok: boolean
+    running: boolean
+    last_heartbeat_age_s: number | null
+    detail: string
+  }
+  sources: {
+    updated_at: string | null
+    counts: Record<string, number>
+    switches: SourceHealthSwitch[]
+    active: Record<string, string>
+    targets: SourceHealthEntry[]
+    detail?: string
+  }
+  integrity: {
+    status: 'blocked' | 'clean' | 'unavailable'
+    pending_count: number | null
+    days: string[]
+    assets: Record<string, number>
+    kinds: Record<string, number>
+    detail?: string
+  }
+}
+
+export interface ProviderFallbacks {
+  realtime: string[]
+  financial: string[]
+}
+
 export interface DataSourceTestResult {
   error?: string
   provider: string
@@ -2372,6 +2471,11 @@ export interface AccountUser {
   id: number
   email: string
   role: 'admin' | 'pro' | 'free'
+  /** 权限组 key：super_admin / admin / editor（旧后端可能缺省） */
+  perm_role?: string
+  perm_role_name?: string
+  /** 展开后的权限码；缺省时按 is_admin 兼容推导 */
+  permissions?: string[]
   is_active: boolean
   email_verified: boolean
   subscription_expires_at: number | null
@@ -2381,6 +2485,36 @@ export interface AccountUser {
     ai_daily: { limit: number; used: number; unlimited: boolean }
     backtest_monthly: { limit: number; used: number; unlimited: boolean }
   }
+}
+
+export type PermissionGroupKey = 'page' | 'feature' | 'admin'
+
+export interface PermissionItem {
+  key: string
+  label: string
+  group: PermissionGroupKey
+  description: string
+}
+
+export interface RoleGroup {
+  key: string
+  name: string
+  description: string
+  permissions: string[]
+  is_builtin: boolean
+  updated_at: number
+}
+
+export interface AdminUserRow {
+  id: number
+  email: string
+  role: 'admin' | 'pro' | 'free'
+  perm_role: string
+  perm_role_name: string
+  is_active: boolean
+  email_verified: boolean
+  created_at: number
+  last_login_at: number | null
 }
 
 export interface CustomSourceConfig {
@@ -2860,27 +2994,7 @@ export interface LabReport {
 // ===== API surface =====
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
-
-  // ===== Auth (访问认证) =====
-  authStatus: () =>
-    request<{ configured: boolean; authenticated: boolean }>('/api/auth/status'),
-  authSetup: (password: string) =>
-    request<{ ok: boolean }>('/api/auth/setup', {
-      method: 'POST',
-      body: JSON.stringify({ password }),
-    }),
-  authLogin: (password: string) =>
-    request<{ ok: boolean }>('/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ password }),
-    }),
-  authLogout: () =>
-    request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
-  authChangePassword: (oldPassword: string, newPassword: string) =>
-    request<{ ok: boolean }>('/api/auth/change-password', {
-      method: 'POST',
-      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
-    }),
+  systemHealth: () => request<SystemHealthSnapshot>('/api/system/health'),
 
   // ===== Accounts (多用户账号体系: 邮箱注册 + 登录) =====
   accountStatus: () =>
@@ -2928,6 +3042,39 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, code, new_password: newPassword }),
     }),
+
+  // ===== 权限管理（管理后台 /api/admin） =====
+  permissionCatalog: () =>
+    request<{
+      permissions: PermissionItem[]
+      groups: Record<PermissionGroupKey, string>
+      perm_roles: Array<{ key: string; label: string }>
+      role_groups: RoleGroup[]
+    }>('/api/admin/permission-catalog'),
+  adminUsers: (params: { q?: string; page?: number; pageSize?: number } = {}) => {
+    const search = new URLSearchParams()
+    if (params.q) search.set('q', params.q)
+    search.set('page', String(params.page ?? 1))
+    search.set('page_size', String(params.pageSize ?? 20))
+    return request<{ total: number; page: number; page_size: number; items: AdminUserRow[] }>(
+      `/api/admin/users?${search.toString()}`,
+    )
+  },
+  adminUpdateUser: (id: number, patch: { perm_role?: string; is_active?: boolean }) =>
+    request<{ user: AccountUser }>(`/api/admin/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  updateRoleGroup: (
+    key: string,
+    patch: { name?: string; description?: string; permissions?: string[] },
+  ) =>
+    request<{ group: RoleGroup }>(`/api/admin/role-groups/${key}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  permissionAudit: (limit = 50) =>
+    request<{ items: Array<Record<string, unknown>> }>(`/api/admin/permission-audit?limit=${limit}`),
 
   settings: () => request<SettingsState>('/api/settings'),
   saveTickflowKey: (api_key: string) =>
@@ -3054,6 +3201,19 @@ export const api = {
       method: 'POST', body: JSON.stringify({ action, reset_routes: resetRoutes }), quiet: true,
     }),
   dataSources: () => request<DataSourcesResponse>('/api/settings/data-sources'),
+  dataSourceHealth: () => request<SourceHealthSnapshot>('/api/settings/data-sources/health'),
+  probeDataSourceHealth: (scope = 'all') =>
+    request<SourceHealthSnapshot>('/api/settings/data-sources/health/probe', {
+      method: 'POST',
+      body: JSON.stringify({ scope }),
+      timeoutMs: 180_000,
+    }),
+  providerFallbacks: () => request<ProviderFallbacks>('/api/settings/data-sources/fallbacks'),
+  saveProviderFallbacks: (body: Partial<ProviderFallbacks>) =>
+    request<ProviderFallbacks>('/api/settings/data-sources/fallbacks', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
   capabilityMatrix: () => request<CapabilityMatrix>('/api/settings/capability-matrix'),
   dataSource: (name: string) => request<CustomSourceConfig>(`/api/settings/data-sources/${encodeURIComponent(name)}`),
   saveDataSource: (config: CustomSourceConfig) =>

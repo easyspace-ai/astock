@@ -2,8 +2,8 @@
 
 调度:
   09:10 盘前 — 同步个股维表 instruments (全量覆盖)
-  15:35 盘后 — 日K同步 + 增量除权因子 + enriched 计算 + 刷新视图
-  (默认 15:35: 盘后固定价 15:30 终止 + 供应商日线定稿缓冲, 见 preferences)
+  16:40 盘后 — 日K同步 + 增量除权因子 + enriched 计算 + 刷新视图
+  (默认 16:40: 供应商 T+0 官方日K在 15:35 后仍未发布, 16:40 才稳定, 见 preferences)
 
 盘后同步策略:
   日 K: QuoteService 交易时段已实时落盘 → 有数据时跳过 batch,首次拉 1 年区间
@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.config import settings
 from app.indicators.pipeline import filter_halt_days, run_pipeline
 from app.market_time import cn_today
-from app.services import index_sync, instrument_sync, kline_sync
+from app.services import finalization, index_sync, instrument_sync, kline_sync
 from app.services import preferences as _prefs
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.pools import get_pool
@@ -138,6 +139,33 @@ def _invalidate(table: str | None = None) -> None:
     invalidate_data_cache(table)
 
 
+def _day_partition_exists(repo: KlineRepository, table: str, day) -> bool:
+    """某日是否有实际 parquet 分区; 历史定向修补不要求当天定版。"""
+    part = repo.store.data_dir / table / f"date={day}"
+    return part.is_dir() and any(part.glob("*.parquet"))
+
+
+def _finalize_daily_if_possible(
+    repo: KlineRepository, table: str, day, expected: list[str] | set[str] | None,
+) -> bool:
+    """官方日K写入后校验并打定版标记; 不达标绝不打标。"""
+    ok, rows, exp, reason = finalization.inspect_official_day(
+        repo.store.data_dir, table, day, expected_symbols=expected,
+    )
+    if not ok:
+        logger.warning(
+            "日K未定版: %s %s — %s (rows=%d expected=%d); 保持未定版状态, "
+            "实时写盘守卫与自检会继续拦截",
+            table, day, reason, rows, exp,
+        )
+        return False
+    finalization.mark_finalized(
+        repo.store.data_dir, table, day,
+        source="official_daily_batch", rows=rows, expected=exp or None,
+    )
+    return True
+
+
 def _resolve_universe(capset: CapabilitySet, repo=None) -> list[str]:
     """解析标的池 — 本地 instruments 维表 + 自选 (单一来源, 无池兜底)。
 
@@ -229,11 +257,12 @@ def run_now(
     from datetime import datetime as _dt
     from datetime import timedelta as _td
     latest_daily = repo.latest_daily_date()
-    # 管道「今天」必须是北京日期: 美西主机 15:35 北京时间仍是本地昨天,
+    # 管道「今天」必须是北京日期: 美西主机盘后北京时间仍是本地昨天,
     # date.today() 会把昨日日K当成已齐, 当日官方收盘价永远拉不进来。
     today = cn_today()
     today_exists = latest_daily and latest_daily >= today
     new_daily_days = 0
+    written_daily = 0
 
     # 完整性自愈: 检测最近交易日的盘中快照/缺口 (盘中停机后次日开实时会留下
     # 中午快照, 而下方"今天已有数据→只刷今天"分支会让它永久留存)。
@@ -308,22 +337,6 @@ def run_now(
             preview = ", ".join(repair_failed_symbols[:10])
             more = "" if len(repair_failed_symbols) <= 10 else f" 等 {len(repair_failed_symbols)} 只"
             stage_errors.append(f"日K修复有 {len(repair_failed_symbols)} 只标的拉取失败: {preview}{more}")
-    elif (
-        today_exists
-        and stale_day is None
-        and capset.has(Cap.QUOTE_POOL)
-        and _prefs.get_daily_data_provider() == "tickflow"
-    ):
-        # 付费档:今天有数据(QuoteService 已落盘)→ 实时行情覆写,确保最新。
-        # stale_day 非空时禁用本分支: "只刷今天"会让停机日的盘中快照永久留存,
-        # 降级到下方 batch 路径从坏日起重拉。
-        # free/none 档无 quote.pool 能力,即便今天已有数据(如从 expert 降级),
-        # 也降级到下方 batch 路径刷新,避免调用无权限的实时行情接口。
-        emit("sync_daily", 12, f"获取日K [{today} ~ {today}] 实时行情…")
-        written_daily = kline_sync.sync_daily_by_quotes(repo)
-        new_daily_days = 1
-        emit("sync_daily", 45, f"日K 完成,{written_daily} 只标的")
-        logger.info("sync_daily: [%s ~ %s] live quotes, %d symbols", today, today, written_daily)
     elif latest_daily or stale_day:
         # 有历史 → batch 补齐缺口。
         # 也覆盖"今天已有数据但无实时行情权限(free/none)"的降级场景:
@@ -368,6 +381,24 @@ def run_now(
         new_daily_days = 365
         emit("sync_daily", 45, "日K 完成")
         logger.info("sync_daily: [%s ~ %s] done", start_date, today)
+
+    # 只有全市场官方 batch 才允许给当日打定版标记; 定向修补只补部分标的,
+    # 不能把整个分区标成定版。定版后实时路径的覆写会被 finalization 守卫拒绝。
+    if (pull_a_share and override_symbols is None
+            and finalization.finalize_window_open()
+            and _day_partition_exists(repo, "kline_daily", today)):
+        if written_daily:
+            # 官方 batch 没返回的标的不能保留实时快照凑数; 清掉后按缺失处理,
+            # 让覆盖率/自检暴露真实缺口, 而不是"行数看着完整"。
+            repo.drop_unbackfilled_live_rows_range(
+                "kline_daily", daily_range_start or today, today, universe,
+            )
+        if not _finalize_daily_if_possible(repo, "kline_daily", today, universe):
+            stage_errors.append(
+                f"日K未定版: {today} 官方 batch 覆盖不足或仍含实时快照, "
+                "已保留未定版状态等待补跑/修补"
+            )
+
     _invalidate("daily")
 
     # 完整性修复时删除股票 enriched 的坏分区: 增量重算只算 enriched 里不存在
@@ -592,6 +623,39 @@ def run_now(
                     on_chunk_done=_index_chunk,
                 )
                 emit("sync_index", 88, f"指数日K完成,{written_index_daily} 行")
+                if (finalization.finalize_window_open()
+                        and _day_partition_exists(repo, "kline_index_daily", today)):
+                    available_indices = set(repo.get_index_symbol_set())
+                    missing_required = set(finalization.REQUIRED_INDEX_SYMBOLS) - available_indices
+                    expected_indices = available_indices or set(finalization.REQUIRED_INDEX_SYMBOLS)
+                    if missing_required:
+                        # 北交所代码表/指数源不可用时, 不能让整个指数管道每天 failed;
+                        # 但缺失必须显式告警, 不能静默只写 8 只。
+                        logger.warning(
+                            "指数维表缺 %d 只必需指数 (样例: %s); 本次按可用 %d 只定版",
+                            len(missing_required), sorted(missing_required)[:5],
+                            len(expected_indices),
+                        )
+                        try:
+                            from app.services.system_alert import emit as system_emit
+                            system_emit(
+                                "index_universe_incomplete", "warn", "指数维表不完整",
+                                f"缺少 {sorted(missing_required)}; 指数日K只写入了 "
+                                f"{len(expected_indices)} 只, 899050.BJ 等标的可能缺失",
+                                dedupe_key="index_universe",
+                            )
+                        except Exception:  # noqa: BLE001
+                            logger.debug("指数缺失告警发送失败", exc_info=True)
+                    if written_index_daily:
+                        repo.drop_unbackfilled_live_rows_range(
+                            "kline_index_daily", index_start, today, expected_indices,
+                        )
+                    if not _finalize_daily_if_possible(
+                        repo, "kline_index_daily", today, expected_indices,
+                    ):
+                        stage_errors.append(
+                            f"指数日K未定版: {today} 可用指数官方覆盖不足"
+                        )
                 _invalidate("index_instruments")
                 _invalidate("index_daily")
                 _invalidate("index_enriched")
@@ -650,6 +714,16 @@ def run_now(
                     on_chunk_done=_etf_chunk,
                 )
                 emit("sync_index", 88, f"ETF 日K完成,{written_etf_daily} 行")
+                if (etf_symbols and finalization.finalize_window_open()
+                        and _day_partition_exists(repo, "kline_etf_daily", today)):
+                    if written_etf_daily:
+                        repo.drop_unbackfilled_live_rows_range(
+                            "kline_etf_daily", etf_start, today, etf_symbols,
+                        )
+                    if not _finalize_daily_if_possible(
+                        repo, "kline_etf_daily", today, etf_symbols,
+                    ):
+                        stage_errors.append(f"ETF 日K未定版: {today} 官方覆盖不足")
                 _invalidate("etf_instruments")
                 _invalidate("etf_daily")
 
@@ -1063,12 +1137,35 @@ def _run_tracked(fn, job_label: str) -> bool:
         job_store.succeed(job_id, result)
         succeeded = True
         logger.info("scheduled %s completed: job_id=%s", job_label, job_id)
+        try:
+            from app.services.system_alert import emit
+
+            emit(
+                "pipeline_recovered", "info", f"盘后管道恢复: {job_label}",
+                f"scheduled {job_label} 执行成功 (job_id={job_id})",
+                dedupe_key=f"pipeline:{job_label}",
+                data={"job_label": job_label, "job_id": job_id},
+            )
+        except Exception:  # noqa: BLE001 — 告警失败不影响任务结果
+            logger.debug("pipeline 恢复告警发送失败", exc_info=True)
     except JobCancelledError:
         # 已由 terminate() 标记失败(卡死/手动取消), 拉取线程在分块回调处自行退出
         logger.warning("scheduled %s cancelled: job_id=%s", job_label, job_id)
     except Exception:
         logger.exception("scheduled %s failed: job_id=%s", job_label, job_id)
         job_store.fail(job_id, f"scheduled {job_label} failed")
+        try:
+            from app.services.system_alert import emit
+
+            emit(
+                "pipeline_failed", "critical", f"盘后管道失败: {job_label}",
+                f"scheduled {job_label} 执行失败 (job_id={job_id})，"
+                "请检查 backend/error.log 中的堆栈与数据完整性状态",
+                dedupe_key=f"pipeline:{job_label}",
+                data={"job_label": job_label, "job_id": job_id},
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("pipeline 失败告警发送失败", exc_info=True)
     finally:
         release_run_slot(job_id)
     return succeeded
@@ -1326,7 +1423,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
     """启动调度器。
 
     工作日 09:10 — 同步个股维表
-    工作日 HH:MM — 盘后管道（时间由用户偏好决定，默认 15:35）
+    工作日 HH:MM — 盘后管道（时间由用户偏好决定，默认 16:40）
     """
     from app.services import preferences
     sched = preferences.get_pipeline_schedule()
@@ -1443,6 +1540,78 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         _register_review_job(scheduler, repo, review_sched["hour"], review_sched["minute"])
         logger.info("scheduled_review enabled @%02d:%02d mon-fri",
                     review_sched["hour"], review_sched["minute"])
+
+    # 数据源健康探测: 行情/分钟盘中每分钟, 资讯每 30 分钟, 日K/财务在关键时点。
+    # 探测只取最小样本, 只写健康状态, 不进入情/管道热路径。
+    from app.services import source_health
+
+    def _probe_scope(scope: str) -> None:
+        app_state = _get_app_state()
+        if app_state is not None:
+            source_health.scheduled_probe(app_state, scope)
+
+    scheduler.add_job(
+        lambda: _probe_scope("market"),
+        trigger=IntervalTrigger(seconds=60),
+        id="source_health_market",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=30,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        lambda: _probe_scope("info"),
+        trigger=CronTrigger(hour="7-23", minute="*/30", timezone="Asia/Shanghai"),
+        id="source_health_info",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=600,
+        replace_existing=True,
+    )
+    # 日K收盘探测必须晚于官方日K主跑: 15:45 时供应商 T+0 尚未发布,
+    # 会把可用源误判 degraded, 且要到次日 08:45 才恢复。改到 17:00,
+    # 此时 16:40 主跑和 16:40-17:40 补跑窗口都已开始, 探测结果才代表真实状态。
+    for job_id, hour, minute in (
+        ("source_health_daily_close", 17, 0),
+        ("source_health_daily_preopen", 8, 45),
+    ):
+        scheduler.add_job(
+            lambda _hour=hour: _probe_scope("daily"),
+            trigger=CronTrigger(day_of_week="mon-fri", hour=hour, minute=minute, timezone="Asia/Shanghai"),
+            id=job_id,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=1800,
+            replace_existing=True,
+        )
+    scheduler.add_job(
+        lambda: _probe_scope("financial"),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=7, minute=30, timezone="Asia/Shanghai"),
+        id="source_health_financial",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=1800,
+        replace_existing=True,
+    )
+
+    def _system_heartbeat() -> None:
+        app_state = _get_app_state()
+        if app_state is not None:
+            app_state.system_heartbeat_at = time.time()
+
+    # readiness 用这个心跳判断调度器线程是否真正在跑, 而不是只看 running 属性。
+    app_state = _get_app_state()
+    if app_state is not None:
+        app_state.system_heartbeat_at = time.time()
+    scheduler.add_job(
+        _system_heartbeat,
+        trigger=IntervalTrigger(seconds=60),
+        id="system_heartbeat",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=30,
+        replace_existing=True,
+    )
 
     scheduler.start()
     logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d mon-fri",

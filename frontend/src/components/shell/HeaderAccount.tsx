@@ -17,7 +17,7 @@ const ROLE_CLASS: Record<string, string> = {
 /**
  * 顶栏右侧账户区 — 由原侧边栏底部用户卡片与后台入口上移。
  * 邮箱账号: 头像按钮 + 下拉(个人中心 / 管理后台 / 退出登录);
- * 旧访问密码模式(无账号会话): 仅管理员保留后台图标入口。
+ * 账号菜单: 个人中心、管理后台入口与退出登录。
  */
 export function HeaderAccount({ isAdmin }: { isAdmin: boolean }) {
   const navigate = useNavigate()
@@ -42,35 +42,14 @@ export function HeaderAccount({ isAdmin }: { isAdmin: boolean }) {
   }, [open])
 
   const logout = async () => {
-    // 后端鉴权双 cookie 任一有效即放行(tf_user_session 优先, tf_session 兜底),
-    // 必须同时注销邮箱账号会话与面板密码会话, 否则旧会话残留导致"登出后仍保持登录态"。
-    try { await api.accountLogout() } catch { /* 后端可能已无会话 */ }
-    try { await api.authLogout() } catch { /* 旧面板会话可能不存在 */ }
+    try { await api.accountLogout() } catch { /* 会话可能已失效 */ }
     qc.clear()
     navigate('/login', { replace: true })
   }
 
   const adminHref = prefs?.nav_layout ? '/admin?tab=pages&section=menus' : '/admin'
 
-  // 旧访问密码模式: 无账号数据, 管理员直接给后台图标入口
-  if (!data) {
-    if (!isAdmin) return null
-    return (
-      <NavLink
-        to={adminHref}
-        title="管理后台"
-        aria-label="管理后台"
-        className={({ isActive }) =>
-          cn(
-            'flex h-7 w-7 items-center justify-center rounded-control transition-colors duration-150 ease-smooth',
-            isActive ? 'text-accent' : 'text-secondary hover:bg-elevated/70 hover:text-foreground',
-          )
-        }
-      >
-        <Settings className="h-4 w-4 shrink-0" />
-      </NavLink>
-    )
-  }
+  if (!data) return null
 
   const initial = data.email.slice(0, 1).toUpperCase()
 

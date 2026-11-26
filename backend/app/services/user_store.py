@@ -1,20 +1,26 @@
-"""多用户账号存储（SQLite）— 邮箱注册 + 三级权限（admin / pro / free）骨架。
+"""多用户账号存储（SQLite）— 邮箱注册 + 账号等级 + 权限组。
+
+字段语义必须分清（混用会导致越权或配额错乱）:
+  - `role` = **账号等级 / 订阅**, 取值 admin / pro / free, 只决定配额与订阅降级。
+  - `perm_role` = **权限组**, 取值 super_admin / admin / editor, 只决定能访问什么。
+  权限判断一律走 `user_permissions()`, 不要再拿 `role == 'admin'` 当管理员判据。
 
 设计：
-  - 独立于 TSP 现有单密码体系（services/auth.py，auth.json），多用户数据存
+  - 系统唯一认证体系（旧单密码 auth.json 模式已下线），多用户数据存
     data/user_data/users.db（SQLite，WAL 模式），互不干扰。
   - 密码用 PBKDF2-HMAC-SHA256 哈希（标准库 hashlib，参数与 auth.py 一致），
     加随机 salt，恒定时间比较防时序攻击。
   - 会话：随机 token（token_urlsafe），存 sessions 表（含过期时间），
     由 accounts API 下发 HttpOnly cookie；中间件按 token 查出当前用户。
-  - 角色：admin（系统内置，全权限）/ pro（付费订阅，全功能按配额）/
-    free（注册默认，基础功能按配额）。pro 到期后查询时自动按 free 处理。
+  - 权限组：三个内置组, 组权限存 role_groups.permissions(JSON), 单行读取;
+    变更走 audit 表留痕。未知组返回空权限集（fail-closed）。
   - 配额：ai_daily（AI 助手次数）、backtest_monthly（回测次数），
-    按日/月自动重置；admin 配额为 -1（不限）。
+    按日/月自动重置；admin 等级配额为 -1（不限）。
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import secrets as _secrets
@@ -25,6 +31,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from app.services import rbac
+
 logger = logging.getLogger(__name__)
 
 # ── 角色常量 ────────────────────────────────────────────────
@@ -33,7 +41,7 @@ ROLE_PRO = "pro"
 ROLE_FREE = "free"
 ROLES = (ROLE_ADMIN, ROLE_PRO, ROLE_FREE)
 
-# ── PBKDF2 参数（与 services/auth.py 一致）──────────────────
+# ── PBKDF2 参数 ───────────────────────────────────────────
 _PBKDF2_ITER = 200_000
 _SALT_LEN = 16
 _TOKEN_BYTES = 32
@@ -82,7 +90,9 @@ def _init_schema() -> None:
                 ai_daily_reset TEXT,
                 backtest_monthly_used INTEGER NOT NULL DEFAULT 0,
                 backtest_monthly_limit INTEGER NOT NULL DEFAULT 10,
-                backtest_monthly_reset TEXT
+                backtest_monthly_reset TEXT,
+                perm_role TEXT,
+                last_login_at REAL
             )
             """
         )
@@ -113,20 +123,82 @@ def _init_schema() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_vcodes_user ON verification_codes(user_id, purpose)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS role_groups (
+                key          TEXT PRIMARY KEY,
+                name         TEXT NOT NULL,
+                description  TEXT NOT NULL DEFAULT '',
+                permissions  TEXT NOT NULL,
+                is_builtin   INTEGER NOT NULL DEFAULT 1,
+                updated_at   REAL NOT NULL,
+                updated_by   INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS permission_audit (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_id    INTEGER,
+                actor_email TEXT,
+                action      TEXT NOT NULL,
+                target      TEXT NOT NULL,
+                detail      TEXT NOT NULL DEFAULT '',
+                created_at  REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_permission_audit_time ON permission_audit(created_at)"
+        )
     _migrate_schema()
 
 
 def _migrate_schema() -> None:
-    """列级迁移：为历史库补 email_verified / sessions.created_at 列。"""
+    """列级迁移：补历史列、播种权限组、回填 perm_role。
+
+    幂等: 每次启动都会执行; 已有的组权限不会被默认值覆盖（管理员改过的矩阵优先）。
+    """
     with _connect() as conn:
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "email_verified" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
+        if "perm_role" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN perm_role TEXT")
+        if "last_login_at" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN last_login_at REAL")
         scols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
         if "created_at" not in scols:
             conn.execute("ALTER TABLE sessions ADD COLUMN created_at REAL NOT NULL DEFAULT 0")
             # 历史行按 expires_at - TTL 回填近似创建时间
             conn.execute("UPDATE sessions SET created_at = expires_at - ? WHERE created_at = 0", (SESSION_TTL,))
+
+        # 播种内置权限组: 只插入缺失的 key, 不覆盖已调整过的矩阵。
+        now = time.time()
+        for key, group in rbac.DEFAULT_GROUPS.items():
+            conn.execute(
+                "INSERT OR IGNORE INTO role_groups"
+                " (key, name, description, permissions, is_builtin, updated_at)"
+                " VALUES (?, ?, ?, ?, 1, ?)",
+                (
+                    key,
+                    str(group["name"]),
+                    str(group["description"]),
+                    json.dumps(group["permissions"], ensure_ascii=False),
+                    now,
+                ),
+            )
+
+        # 回填: 历史 admin 账号 -> 超级管理员, 其余 -> 编辑者。
+        conn.execute(
+            "UPDATE users SET perm_role = ? WHERE perm_role IS NULL AND role = ?",
+            (rbac.SUPER_ADMIN, ROLE_ADMIN),
+        )
+        conn.execute(
+            "UPDATE users SET perm_role = ? WHERE perm_role IS NULL",
+            (rbac.DEFAULT_PERM_ROLE,),
+        )
 
 
 # ================================================================
@@ -158,6 +230,22 @@ def has_users() -> bool:
         return bool(row["n"])
 
 
+def health_check() -> None:
+    """readiness 轻量探针: 用户库存在且可读; 不存在视为首次启动合法状态。
+
+    不调用 _init_schema/_connect: 避免健康检查每 30 秒触发 WAL/建表写操作,
+    阻塞正在登录/改权限的请求。库损坏时 SELECT 会抛异常, 由调用方判定未就绪。
+    """
+    path = _db_path()
+    if not path.exists():
+        return
+    conn = sqlite3.connect(str(path), timeout=2)
+    try:
+        conn.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+    finally:
+        conn.close()
+
+
 def create_user(email: str, password: str, role: str = ROLE_FREE) -> dict[str, Any]:
     """创建用户。返回用户 dict；邮箱重复抛 ValueError。"""
     _init_schema()
@@ -169,16 +257,17 @@ def create_user(email: str, password: str, role: str = ROLE_FREE) -> dict[str, A
     if not has_users():
         role = ROLE_ADMIN
         logger.info("first user registered as admin: %s", email)
+    perm_role = rbac.default_perm_role_for_account_role(role)
     with _connect() as conn:
         try:
             cur = conn.execute(
                 """
                 INSERT INTO users
-                    (email, password_hash, password_salt, role, created_at,
+                    (email, password_hash, password_salt, role, perm_role, created_at,
                      ai_daily_limit, backtest_monthly_limit)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (email, hash_hex, salt_hex, role, time.time(),
+                (email, hash_hex, salt_hex, role, perm_role, time.time(),
                  QUOTA_DEFAULTS[role]["ai_daily"], QUOTA_DEFAULTS[role]["backtest_monthly"]),
             )
             user_id = cur.lastrowid
@@ -294,6 +383,276 @@ def grant_pro(user_id: int, days: int) -> dict[str, Any] | None:
     start = max(base, now)  # 未到期则续期
     new_exp = start + days * 86400
     return update_user(user_id, role=ROLE_PRO, subscription_expires_at=new_exp)
+
+
+# ================================================================
+# 权限组 / 权限判定
+# ================================================================
+def _row_to_group(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    d = dict(row)
+    try:
+        perms = json.loads(d.get("permissions") or "[]")
+    except (TypeError, ValueError):
+        # 脏数据不静默当全权限: 记日志并按空集处理 (fail-closed)
+        logger.warning("role_groups.permissions 非法 JSON (key=%s)", d.get("key"))
+        perms = []
+    d["permissions"] = [p for p in perms if p in rbac.PERMISSION_KEYS] if isinstance(perms, list) else []
+    d["is_builtin"] = bool(d.get("is_builtin"))
+    return d
+
+
+def list_role_groups() -> list[dict[str, Any]]:
+    _init_schema()
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM role_groups ORDER BY key ASC").fetchall()
+    return [g for g in (_row_to_group(r) for r in rows) if g is not None]
+
+
+def get_role_group(key: str) -> dict[str, Any] | None:
+    _init_schema()
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM role_groups WHERE key = ?", (key,)).fetchone()
+    return _row_to_group(row)
+
+
+def permissions_for_group(key: str) -> frozenset[str]:
+    """权限组 -> 权限码集合。未知组返回空集 (fail-closed)。"""
+    group = get_role_group(key)
+    return frozenset(group["permissions"]) if group else frozenset()
+
+
+def effective_perm_role(user: dict[str, Any]) -> str:
+    """用户实际生效的权限组。
+
+    有值时按值解析（未知组名会解析成空权限, fail-closed）；只有字段为空的历史数据
+    才按账号等级兜底。迁移会把历史数据回填成非空, 此处兜底只是防御。
+    """
+    perm_role = user.get("perm_role")
+    if perm_role:
+        return str(perm_role)
+    return rbac.default_perm_role_for_account_role(user.get("role"))
+
+
+def user_permissions(user: dict[str, Any] | None) -> frozenset[str]:
+    """当前用户拥有的权限码。
+
+    `user is None` 只有两种情况: 无账号会话的 API Token/内部调用, 或系统
+    尚未初始化时的本机请求。两者都是面板主人, 按全权限处理, 与改造前一致。
+    """
+    if user is None:
+        return rbac.all_permissions()
+    if not user.get("is_active", True):
+        return frozenset()
+    return permissions_for_group(effective_perm_role(user))
+
+
+def update_role_group(
+    key: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    permissions: list[str] | None = None,
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """更新内置权限组。非法权限码整批拒绝; 超管组必须保留关键权限。"""
+    _init_schema()
+    group = get_role_group(key)
+    if group is None:
+        raise ValueError("权限组不存在")
+    if permissions is not None:
+        checked = rbac.validate_permissions(permissions)
+        if key == rbac.SUPER_ADMIN:
+            missing = [k for k in rbac.SUPER_ADMIN_REQUIRED if k not in checked]
+            if missing:
+                raise ValueError(f"超级管理员组不能移除: {', '.join(missing)}")
+    else:
+        checked = None
+    sets: list[str] = []
+    params: list[Any] = []
+    if name is not None:
+        sets.append("name = ?")
+        params.append(name.strip() or group["name"])
+    if description is not None:
+        sets.append("description = ?")
+        params.append(description.strip())
+    if checked is not None:
+        sets.append("permissions = ?")
+        params.append(json.dumps(checked, ensure_ascii=False))
+    sets.append("updated_at = ?")
+    params.append(time.time())
+    sets.append("updated_by = ?")
+    params.append(actor["id"] if actor else None)
+    params.append(key)
+    with _connect() as conn:
+        conn.execute(f"UPDATE role_groups SET {', '.join(sets)} WHERE key = ?", params)
+    updated = get_role_group(key)
+    if updated is None:
+        raise ValueError("权限组不存在")
+    return updated
+
+
+def _snapshot(user: dict[str, Any] | None) -> dict[str, Any]:
+    if not user:
+        return {}
+    return {
+        "email": user.get("email"),
+        "role": user.get("role"),
+        "perm_role": effective_perm_role(user),
+        "is_active": bool(user.get("is_active", True)),
+    }
+
+
+def record_audit(
+    *,
+    actor: dict[str, Any] | None,
+    action: str,
+    target: str,
+    detail: str = "",
+) -> None:
+    """权限变更审计。只记身份与 before/after, 绝不记密码/token。"""
+    _init_schema()
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO permission_audit"
+            " (actor_id, actor_email, action, target, detail, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                actor["id"] if actor else None,
+                actor.get("email") if actor else None,
+                action,
+                target,
+                detail,
+                time.time(),
+            ),
+        )
+
+
+def list_audit(limit: int = 100) -> list[dict[str, Any]]:
+    _init_schema()
+    limit = max(1, min(int(limit), 500))
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM permission_audit ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_super_admins() -> int:
+    _init_schema()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE perm_role = ? AND is_active = 1",
+            (rbac.SUPER_ADMIN,),
+        ).fetchone()
+    return int(row["n"] if row else 0)
+
+
+def apply_user_admin_update(
+    user_id: int,
+    *,
+    perm_role: str | None = None,
+    is_active: bool | None = None,
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """管理员改用户权限组/启禁用。
+
+    约束在这里一次性校验(持有锁, 避免并发把最后一个超管改没):
+      - 不能改自己 (由 API 层拦, 这里也兜底? 不, 这里只保证不变空);
+      - 不能移除/禁用最后一个超级管理员;
+      - 目标当前是超管或要设为超管, 需要 actor 是超级管理员。
+    违反抛 ValueError(调用方映射 409/403)。
+    """
+    _init_schema()
+    actor_is_super = actor is None or effective_perm_role(actor) == rbac.SUPER_ADMIN
+    with _lock:
+        user = get_user(user_id)
+        if user is None:
+            raise KeyError("用户不存在")
+        current_perm = effective_perm_role(user)
+        if perm_role is not None and perm_role not in rbac.PERM_ROLES:
+            raise ValueError(f"非法权限组: {perm_role}")
+        touches_super = current_perm == rbac.SUPER_ADMIN or perm_role == rbac.SUPER_ADMIN
+        if touches_super and not actor_is_super:
+            raise ValueError("只有超级管理员可以授予或调整超级管理员")
+        losing_super = (
+            current_perm == rbac.SUPER_ADMIN
+            and ((perm_role is not None and perm_role != rbac.SUPER_ADMIN)
+                 or is_active is False)
+        )
+        if losing_super and count_super_admins() <= 1:
+            raise ValueError("系统必须保留至少一个启用的超级管理员")
+        sets: list[str] = []
+        params: list[Any] = []
+        if perm_role is not None:
+            sets.append("perm_role = ?")
+            params.append(perm_role)
+        if is_active is not None:
+            sets.append("is_active = ?")
+            params.append(1 if is_active else 0)
+        if sets:
+            params.append(user_id)
+            with _connect() as conn:
+                conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", params)
+    updated = get_user(user_id)
+    if updated is None:
+        raise KeyError("用户不存在")
+    record_audit(
+        actor=actor,
+        action="user.admin_update",
+        target=str(user_id),
+        detail=json.dumps(
+            {"before": _snapshot(user), "after": _snapshot(updated)}, ensure_ascii=False
+        ),
+    )
+    return updated
+
+
+def list_users_admin(q: str = "", page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    """管理后台用户列表(分页, 不含密码字段)。"""
+    _init_schema()
+    page = max(1, int(page))
+    page_size = max(1, min(int(page_size), 200))
+    where = ""
+    params: list[Any] = []
+    q = (q or "").strip().lower()
+    if q:
+        where = "WHERE email LIKE ?"
+        params.append(f"%{q}%")
+    with _connect() as conn:
+        total = int(conn.execute(f"SELECT COUNT(*) AS n FROM users {where}", params).fetchone()["n"])
+        rows = conn.execute(
+            f"SELECT * FROM users {where} ORDER BY id ASC LIMIT ? OFFSET ?",
+            [*params, page_size, (page - 1) * page_size],
+        ).fetchall()
+    users = [_row_to_user(r) for r in rows]
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [
+            {
+                "id": u["id"],
+                "email": u["email"],
+                "role": effective_role(u),
+                "perm_role": effective_perm_role(u),
+                "perm_role_name": rbac.PERM_ROLE_LABELS.get(effective_perm_role(u), ""),
+                "is_active": bool(u.get("is_active", True)),
+                "email_verified": bool(u.get("email_verified")),
+                "created_at": u.get("created_at"),
+                "last_login_at": u.get("last_login_at"),
+            }
+            for u in users
+            if u is not None
+        ],
+    }
+
+
+def touch_last_login(user_id: int) -> None:
+    _init_schema()
+    with _connect() as conn:
+        conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (time.time(), user_id))
 
 
 # ================================================================
@@ -491,15 +850,20 @@ def consume_quota(user: dict[str, Any], kind: str) -> tuple[bool, str]:
 
 def public_user(user: dict[str, Any]) -> dict[str, Any]:
     """对外暴露的用户信息（绝不包含密码字段）。"""
+    perm_role = effective_perm_role(user)
+    perms = user_permissions(user)
     return {
         "id": user["id"],
         "email": user["email"],
         "role": effective_role(user),
+        "perm_role": perm_role,
+        "perm_role_name": rbac.PERM_ROLE_LABELS.get(perm_role, perm_role),
+        "permissions": sorted(perms),
         "is_active": bool(user.get("is_active", True)),
         "email_verified": bool(user.get("email_verified")),
         "subscription_expires_at": user.get("subscription_expires_at"),
         "created_at": user.get("created_at"),
-        "is_admin": effective_role(user) == ROLE_ADMIN,
+        "is_admin": rbac.ADMIN_ACCESS in perms,
         "quotas": get_quotas(user),
     }
 

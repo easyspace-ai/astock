@@ -36,7 +36,6 @@ export const CATEGORY_OPTIONS: { key: string; label: string; desc: string; sensi
   { key: 'history',            label: '历史记录',       desc: '告警历史与助手会话' },
   { key: 'preferences',        label: '偏好设置',       desc: '界面与通知偏好' },
   { key: 'secrets',            label: '密钥（API Key）', desc: '当前生效的 AI / 数据源 / 扩展数据 Key 及通知密钥', sensitive: true },
-  { key: 'auth',               label: '访问凭证',       desc: '访问密码与会话 — 导入后原密码在本机生效', sensitive: true },
 ]
 
 /** 导出默认勾选: 除密钥外全选 (安全默认)。 */
@@ -139,7 +138,7 @@ export function SettingsBackupPanel({ mode = 'all' }: { mode?: 'all' | 'export' 
   const [exportSel, setExportSel] = useState<ReadonlySet<string>>(
     () => new Set(DEFAULT_EXPORT_KEYS),
   )
-  const exportSecrets = exportSel.has('secrets') || exportSel.has('auth')
+  const exportSecrets = exportSel.has('secrets')
 
   // ── 导入 ──
   const fileRef = useRef<HTMLInputElement>(null)
@@ -154,7 +153,7 @@ export function SettingsBackupPanel({ mode = 'all' }: { mode?: 'all' | 'export' 
     mutationFn: (f: File) => api.configBackupInspect(f),
     onSuccess: (r) => {
       setInspect(r)
-      setImportSel(new Set(r.categories.filter(c => c.key !== 'secrets' && c.key !== 'auth').map(c => c.key)))
+      setImportSel(new Set(r.categories.filter(c => c.key !== 'secrets').map(c => c.key)))
       setApplyResult(null)
     },
     onError: () => setFile(null),  // 错误提示由 request 层统一 toast
@@ -285,7 +284,7 @@ export function SettingsBackupPanel({ mode = 'all' }: { mode?: 'all' | 'export' 
             <ShieldAlert className="mt-px h-3.5 w-3.5 shrink-0" />
             <span>
               已勾选敏感内容: 备份文件将包含明文密钥 (AI Key、数据源 Key、Webhook Secret)
-              和/或访问凭证 (密码哈希与会话), 新设备导入后无需重新填写。
+              新设备导入后无需重新填写。
               请妥善保管, 切勿分享或上传到公开位置。
             </span>
           </div>
@@ -553,8 +552,8 @@ export function SettingsBackupPanel({ mode = 'all' }: { mode?: 'all' | 'export' 
                 将导入 {importSel.size} 个类别
                 {allowOverwrite ? ', 并覆盖已存在的同名项' : ''}。
               </div>
-              {(importSel.has('secrets') || importSel.has('auth')) && (
-                <div className="text-warning">已勾选敏感内容, 导入后将覆盖本机同名密钥/访问凭证。</div>
+              {importSel.has('secrets') && (
+                <div className="text-warning">已勾选敏感内容, 导入后将覆盖本机同名密钥。</div>
               )}
               <div>策略源码会在导入时执行安全校验, 无法通过校验的条目将被跳过。</div>
             </div>

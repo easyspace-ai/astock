@@ -11,8 +11,9 @@ vi.mock('./Settings', () => ({ Settings: ({ embedded }: { embedded?: boolean }) 
 vi.mock('./Data', () => ({ Data: () => <div data-testid="data-panel" /> }))
 vi.mock('@/lib/useAccount', () => ({
   useAccountUser: () => ({ data: { email: 'admin@example.com', role: 'admin' }, isLoading: false }),
+  usePermissions: () => ({ can: () => true, canAny: () => true, loading: false, user: { email: 'admin@example.com', role: 'admin' }, codes: [] }),
 }))
-vi.mock('@/lib/api', () => ({ api: { accountLogout: vi.fn(), authLogout: vi.fn() } }))
+vi.mock('@/lib/api', () => ({ api: { accountLogout: vi.fn() } }))
 
 let host: HTMLDivElement
 let root: Root

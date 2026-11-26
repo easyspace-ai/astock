@@ -337,6 +337,8 @@ class QuoteService:
         # 午休/收盘最终同步状态: 到边界后必须成功拉取一版行情, 再进入休盘态。
         self._final_sync_done: set[tuple[date, str]] = set()
         self._final_sync_failed: dict[tuple[date, str], str] = {}
+        # 收盘定版后实时写盘被守卫拒绝: 每天只记一次, 避免轮询刷日志。
+        self._live_write_blocked_log: dict[date, str] = {}
         # 最近一次 final 定版拉取是否取得边界后快照 (None=非 final 拉取)
         self._last_final_confirmed: bool | None = None
         self._holiday_active = False  # 交易日探针当前是否判休市 (日志去重)
@@ -866,6 +868,9 @@ class QuoteService:
         configured = str(preferences.load().get("realtime_data_provider") or "").strip().lower()
         if configured and configured != "tickflow" and provider_name == "tickflow":
             provider_name = configured
+        # 主备路由: 仅当用户配置了备用链且主源已被健康中心判定不可用时切换。
+        from app.services import source_health
+        provider_name = source_health.resolve_provider("realtime", provider_name)
         demand = self._wanted_quotes()
         if provider_name != "tickflow":
             from app.data_providers import custom as custom_sources
@@ -1139,6 +1144,19 @@ class QuoteService:
             )
             self._broadcast_quote_updated()
             return
+
+        # 盘后管道已定版, 或已过实时写盘截止: 实时路径只更新内存缓存供展示,
+        # 绝不再覆写 kline_daily/kline_*_enriched。否则 18:57 重启的 close_final
+        # 会把盘后管道定版的官方日K整分区换成快照 (2026-11-20 线上事故)。
+        if self._repo:
+            guard = getattr(self._repo, "live_daily_write_block_reason", None)
+            blocked = guard("stock", cn_today()) if callable(guard) else None
+            if blocked:
+                if self._live_write_blocked_log.get(cn_today()) != blocked:
+                    self._live_write_blocked_log[cn_today()] = blocked
+                    logger.warning("实时行情已停止日K落盘: %s; 仅更新展示缓存", blocked)
+                self._broadcast_quote_updated()
+                return
 
         # 轮询放量状态更新 (volume_delta 规则的差值来源)
         self._update_volume_delta(stock_records, fetched_at)

@@ -76,6 +76,9 @@ class FakeClient:
     def is_connected(self) -> bool:
         return True
 
+    def last_ok_age_s(self) -> float:
+        return 0.0
+
     def pool_stats(self) -> dict:
         return {"size": 1}
 
@@ -141,7 +144,11 @@ def test_symbol_mapping_rejects_unknown(symbol: str) -> None:
 def test_index_detection_uses_suffix_not_prefix() -> None:
     assert ts.is_index("000001.SH") is True
     assert ts.is_index("000001.SZ") is False  # 平安银行不是指数
+    assert ts.is_index("000002.SH") is True  # 上证A股指数, 与万科A(000002.SZ)同码
+    assert ts.is_index("000680.SH") is True  # 科创综指
     assert ts.is_index("399001.SZ") is True
+    assert ts.is_index("899050.BJ") is True  # 北证50
+    assert ts.is_index("920001.BJ") is False  # 北交所股票
     assert ts.is_index("600519.SH") is False
     assert ts.is_etf("510300.SH") is True
     assert ts.is_etf("159915.SZ") is True
@@ -528,3 +535,31 @@ def test_close_is_idempotent() -> None:
     p.close()
     p.close()  # 注入的 client 不由 provider 关闭, 但仍不应抛
     assert client.calls.count(("close",)) == 0
+
+
+def test_bj_unavailable_retries_after_cooldown(monkeypatch) -> None:
+    """北交所代码表瞬断不能变成进程级永久跳过。"""
+    client = TdxRsClient()
+    calls = {"bj": 0}
+
+    def fake_security_list(market):
+        if market == 1:
+            return [{"code": "600519", "name": "贵州茅台"}]
+        if market == 0:
+            return [{"code": "000001", "name": "平安银行"}]
+        calls["bj"] += 1
+        if calls["bj"] == 1:
+            raise TdxRsError("market=2 unavailable")
+        return [{"code": "920001", "name": "北交所样本"}]
+
+    monkeypatch.setattr(client, "security_list", fake_security_list)
+    first = client.universe()
+    assert client._bj_unsupported is True
+    assert not any(s.endswith(".BJ") for s in first)
+
+    # 强制越过冷却点, 下一次 universe() 应重新尝试 market=2。
+    client._bj_retry_at = 0.0
+    client._universe_at = 0.0
+    second = client.universe()
+    assert client._bj_unsupported is False
+    assert any(s.endswith(".BJ") for s in second)

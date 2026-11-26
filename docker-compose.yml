@@ -32,3 +32,22 @@ services:
       # Windows PowerShell/CMD 下 HOME 常未设置, 可通过 .env 里 CODEX_HOME_HOST 覆盖。
       - ${CODEX_HOME_HOST:-${HOME}/.codex}:/root/.codex:ro
     restart: unless-stopped
+    # 盘后管道 15:35 触发, 进程内 AsyncIOScheduler 没有持久化 job store;
+    # 因此本服务必须保持单副本。若未来水平扩容为多副本, 必须先把调度改为
+    # 外部单例 (分布式锁或独立 worker), 否则每个副本都会跑一遍盘后管道。
+    # stop_grace_period 给正在执行的日K写入/校验留出收尾时间, 降低半成品分区。
+    stop_grace_period: 120s
+    # 只证明进程活着的 /health 不够: /ready 会检查数据目录可写、磁盘水位、
+    # 用户库可读与调度器心跳。外部数据源抖动不会让容器反复重启。
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3018/ready', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # 限制 Docker 自身 json 日志膨胀, 避免磁盘写满后应用日志 handler 停用。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

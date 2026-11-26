@@ -1,15 +1,12 @@
 /**
- * 访问认证页 — 邮箱注册 / 登录 / 邮箱验证 / 忘记密码（多用户账号体系）。
+ * 登录页 — 邮箱注册 / 登录 / 邮箱验证 / 忘记密码（邮箱账号体系）。
  *
  * 五态（由 /api/accounts/status 驱动）:
- *   - initialized=false → 显示「注册」（系统首个账号自动成为管理员）
+ *   - initialized=false → 显示「注册」（系统首个账号自动成为超级管理员）
  *   - initialized=true, authenticated=false → 登录页（可切换注册 / 忘记密码）
  *   - authenticated=true → 直接进入面板
  *   - register 成功后 → 「验证邮箱」步骤（可跳过）
  *   - forgot / reset → 忘记密码自助重置流程
- *
- * 兼容: 后端若无多用户体系（旧版 /api/accounts 404）时, 回退到原
- * 面板密码登录（/api/auth/setup + /api/auth/login）。
  */
 import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -32,6 +29,8 @@ export function redirectTarget(): string {
   return raw
 }
 
+type AccountStatus = { initialized: boolean; authenticated: boolean; user: AccountUser | null }
+
 export function Auth({ initialMode = 'login' }: { initialMode?: Mode }) {
   const navigate = useNavigate()
   // 挂载时一次性取定落地地址: 之后再读 window.search 已被上一跳清空, 会退回 '/' 造成二次弹回
@@ -45,59 +44,26 @@ export function Auth({ initialMode = 'login' }: { initialMode?: Mode }) {
   const [localError, setLocalError] = useState('')
   const [notice, setNotice] = useState('')
   const [devCode, setDevCode] = useState('')
-
-  // 账号体系状态: 加载中(null) / 可用 / 回退旧面板密码
-  const [status, setStatus] = useState<{ initialized: boolean; authenticated: boolean; user: AccountUser | null } | null>(null)
-  const [legacy, setLegacy] = useState<{ configured: boolean; authenticated: boolean } | null>(null)
+  const [status, setStatus] = useState<AccountStatus | null>(null)
+  const [statusError, setStatusError] = useState('')
 
   useEffect(() => {
-    // 优先多用户账号体系
     api.accountStatus()
       .then(s => {
         setStatus(s)
-        // 同步探测旧访问密码: 已有部署可能只设了密码、还没有邮箱账号
-        api.authStatus()
-          .then(a => {
-            setLegacy(a)
-            if (a.authenticated) {
-              navigate(redirectTo, { replace: true })
-              return
-            }
-            if (!s.initialized && a.configured && !s.authenticated) {
-              setMode('login') // 只设了访问密码 → 先用密码登录, 可切到邮箱注册
-              return
-            }
-            if (!s.initialized) setMode('register') // 系统未初始化 → 注册首个管理员
-          })
-          .catch(() => setLegacy({ configured: false, authenticated: false }))
-        if (s.authenticated && s.user) {
+        if (s.authenticated) {
           navigate(redirectTo, { replace: true })
+        } else if (!s.initialized) {
+          setMode('register') // 系统未初始化 → 注册首个管理员
         }
       })
-      .catch(() => {
-        // 旧版后端: 回退面板密码模式
-        api.authStatus()
-          .then(s => {
-            setLegacy(s)
-            if (s.authenticated) navigate(redirectTo, { replace: true })
-          })
-          .catch(() => setLegacy({ configured: false, authenticated: false }))
-      })
+      .catch(() => setStatusError('无法读取账号状态，请确认服务已启动后重试'))
   }, [navigate])
-
-  const isAccounts = status !== null
-  const isSetup = legacy !== null && !legacy.configured // 旧版设密码模式
-  // 账号体系可用但还没有任何邮箱账号, 且已配置访问密码 → 允许用旧密码登录
-  const legacyLogin = isAccounts && status?.initialized === false && legacy?.configured === true && mode === 'login'
 
   const go = (m: Mode) => { setMode(m); setLocalError(''); setNotice('') }
 
   const submitMut = useMutation({
     mutationFn: async () => {
-      if (!isAccounts || legacyLogin) {
-        if (isSetup) return api.authSetup(password)
-        return api.authLogin(password)
-      }
       if (mode === 'register') return api.accountRegister(email, password)
       if (mode === 'login') return api.accountLogin(email, password)
       if (mode === 'verify') return api.accountVerifyEmail(code)
@@ -143,7 +109,7 @@ export function Auth({ initialMode = 'login' }: { initialMode?: Mode }) {
       navigate(redirectTo, { replace: true })
     },
     onError: (err: any) => {
-      setLocalError(err?.message || (isSetup ? '设置失败' : '操作失败'))
+      setLocalError(err?.message || '操作失败')
     },
   })
 
@@ -151,7 +117,7 @@ export function Auth({ initialMode = 'login' }: { initialMode?: Mode }) {
     e.preventDefault()
     setLocalError('')
     const emailOk = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email.trim())
-    if (isAccounts && mode !== 'login' && mode !== 'reset' && mode !== 'forgot' && !emailOk) {
+    if (mode !== 'login' && mode !== 'verify' && mode !== 'reset' && mode !== 'forgot' && !emailOk) {
       setLocalError('请输入正确的邮箱地址')
       return
     }
@@ -159,13 +125,24 @@ export function Auth({ initialMode = 'login' }: { initialMode?: Mode }) {
       if (password.length < 6) { setLocalError('密码至少 6 位'); return }
       if (password !== confirmPassword) { setLocalError('两次密码不一致'); return }
     }
-    if (mode === 'verify' && !code.trim()) { setLocalError('请输入验证码'); return }
-    if (mode === 'reset' && !code.trim()) { setLocalError('请输入验证码'); return }
-    if (isSetup && password.length < 6) { setLocalError('密码至少 6 位'); return }
+    if ((mode === 'verify' || mode === 'reset') && !code.trim()) { setLocalError('请输入验证码'); return }
     submitMut.mutate()
   }
 
-  if (status === null && legacy === null) {
+  if (statusError) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-base px-4 text-center">
+        <ShieldAlert className="h-6 w-6 text-danger" />
+        <div className="text-sm text-foreground">{statusError}</div>
+        <button type="button" onClick={() => window.location.reload()}
+          className="h-9 rounded-btn bg-accent px-4 text-sm font-medium text-white hover:bg-accent/90">
+          重新加载
+        </button>
+      </div>
+    )
+  }
+
+  if (status === null) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-base">
         <Loader2 className="h-6 w-6 animate-spin text-muted" />
@@ -173,12 +150,18 @@ export function Auth({ initialMode = 'login' }: { initialMode?: Mode }) {
     )
   }
 
-  const title = isAccounts
-    ? ({ login: '登录', register: '创建账号', verify: '验证邮箱', forgot: '忘记密码', reset: '重置密码' } as const)[mode]
-    : (isSetup ? '设置访问密码' : '登录访问')
-  const subtitle = isAccounts
-    ? (legacyLogin ? '当前使用访问密码登录（尚未创建邮箱账号）' : ({ login: '请输入邮箱与密码以继续', register: status?.initialized === false ? '首个注册账号自动成为管理员' : '创建账号，立即可用（免费版，可随时升级）', verify: '输入验证码完成邮箱验证（可跳过）', forgot: '输入注册邮箱，验证码将发送至已验证邮箱', reset: '输入验证码并设置新密码' } as const)[mode])
-    : (isSetup ? '首次使用, 请为面板设置访问密码' : '请输入访问密码以继续')
+  const title = ({ login: '登录', register: '创建账号', verify: '验证邮箱', forgot: '忘记密码', reset: '重置密码' } as const)[mode]
+  const subtitle = ({
+    login: '请输入邮箱与密码以继续',
+    register: status.initialized === false ? '首个注册账号自动成为超级管理员' : '创建账号，立即可用（免费版，可随时升级）',
+    verify: '输入验证码完成邮箱验证（可跳过）',
+    forgot: '输入注册邮箱，验证码将发送至已验证邮箱',
+    reset: '输入验证码并设置新密码',
+  } as const)[mode]
+
+  const submitLabel = ({
+    login: '登录', register: '注册并进入', verify: '完成验证并进入', forgot: '发送验证码', reset: '重置密码',
+  } as const)[mode]
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-base px-4">
@@ -202,12 +185,12 @@ export function Auth({ initialMode = 'login' }: { initialMode?: Mode }) {
           <div className="mb-5 flex items-center gap-2.5">
             <div className={cn(
               'grid h-9 w-9 place-items-center rounded-lg',
-              isAccounts && mode === 'register' ? 'bg-accent/15 text-accent'
-                : isAccounts && (mode === 'verify' || mode === 'forgot' || mode === 'reset') ? 'bg-emerald-500/15 text-emerald-400'
+              mode === 'register' ? 'bg-accent/15 text-accent'
+                : (mode === 'verify' || mode === 'forgot' || mode === 'reset') ? 'bg-emerald-500/15 text-emerald-400'
                 : 'bg-purple-500/15 text-purple-400',
             )}>
-              {isAccounts && mode === 'register' ? <UserPlus className="h-5 w-5" />
-                : isAccounts && (mode === 'verify' || mode === 'forgot' || mode === 'reset') ? <MailCheck className="h-5 w-5" />
+              {mode === 'register' ? <UserPlus className="h-5 w-5" />
+                : (mode === 'verify' || mode === 'forgot' || mode === 'reset') ? <MailCheck className="h-5 w-5" />
                 : <Lock className="h-5 w-5" />}
             </div>
             <div>
@@ -217,8 +200,8 @@ export function Auth({ initialMode = 'login' }: { initialMode?: Mode }) {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-3">
-            {/* 邮箱(账号体系 + 非 verify) */}
-            {isAccounts && !legacyLogin && mode !== 'verify' && (
+            {/* 邮箱(非 verify) */}
+            {mode !== 'verify' && (
               <div className="relative">
                 <input
                   type="email"
@@ -255,9 +238,9 @@ export function Auth({ initialMode = 'login' }: { initialMode?: Mode }) {
                   type={showPwd ? 'text' : 'password'}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  placeholder={legacyLogin ? '访问密码' : isAccounts ? (mode === 'reset' ? '新密码 (至少 6 位)' : '密码 (至少 6 位)') : '访问密码'}
-                  autoFocus={legacyLogin || !isAccounts}
-                  autoComplete={isAccounts ? (mode === 'register' || mode === 'reset' ? 'new-password' : 'current-password') : 'current-password'}
+                  placeholder={mode === 'reset' ? '新密码 (至少 6 位)' : '密码 (至少 6 位)'}
+                  autoFocus={mode === 'reset'}
+                  autoComplete={mode === 'register' || mode === 'reset' ? 'new-password' : 'current-password'}
                   className="h-10 w-full rounded-btn border border-border bg-base px-3 pr-9 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
                 />
                 <button
@@ -298,7 +281,7 @@ export function Auth({ initialMode = 'login' }: { initialMode?: Mode }) {
                 <span>{notice}</span>
               </div>
             )}
-            {(localError || submitMut.error) && (
+            {(localError) && (
               <div className="flex items-start gap-1.5 rounded-btn bg-danger/10 px-3 py-2 text-[11px] text-danger">
                 <ShieldAlert className="mt-px h-3.5 w-3.5 shrink-0" />
                 <span>{localError}</span>
@@ -307,56 +290,41 @@ export function Auth({ initialMode = 'login' }: { initialMode?: Mode }) {
 
             <button
               type="submit"
-              disabled={submitMut.isPending || (isAccounts && !legacyLogin && mode !== 'verify' && mode !== 'forgot' && !email) || (mode === 'verify' && !code) || (mode === 'reset' && (!code || !password)) || (legacyLogin && !password)}
+              disabled={submitMut.isPending || (mode !== 'verify' && mode !== 'forgot' && !email) || (mode === 'verify' && !code) || (mode === 'reset' && (!code || !password))}
               className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-btn bg-accent text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50"
             >
               {submitMut.isPending ? (
                 <><Loader2 className="h-4 w-4 animate-spin" />处理中…</>
-              ) : (
-                <>{isAccounts ? ({ login: '登录', register: '注册并进入', verify: '完成验证并进入', forgot: '发送验证码', reset: '重置密码' } as const)[mode] : (isSetup ? '设置并进入' : '登录')}</>
-              )}
+              ) : submitLabel}
             </button>
           </form>
 
           {/* 底部导航 */}
-          {isAccounts && (
-            <div className="mt-4 flex items-center justify-between text-[11px] text-muted">
-              {mode === 'login' ? (
-                <>
-                  <span>
-                    {legacyLogin ? '改用邮箱账号？' : '还没有账号？'}{' '}
-                    <button type="button" onClick={() => go('register')} className="text-accent underline-offset-2 hover:underline">
-                      {legacyLogin ? '注册首个管理员' : '免费注册'}
-                    </button>
-                  </span>
-                  {!legacyLogin && (
-                    <button type="button" onClick={() => go('forgot')} className="underline-offset-2 hover:underline hover:text-foreground">忘记密码？</button>
-                  )}
-                </>
-              ) : mode === 'register' || mode === 'verify' ? (
-                <button
-                  type="button"
-                  onClick={() => (mode === 'verify' ? navigate('/', { replace: true }) : go('login'))}
-                  className="inline-flex items-center gap-1 text-accent underline-offset-2 hover:underline"
-                >
-                  <ArrowLeft className="h-3 w-3" />{mode === 'verify' ? '跳过，直接进入（稍后验证）' : '已有账号？去登录'}
-                </button>
-              ) : (
-                <button type="button" onClick={() => go('login')} className="inline-flex items-center gap-1 text-accent underline-offset-2 hover:underline">
-                  <ArrowLeft className="h-3 w-3" />返回登录
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* 提示: 旧版设密码模式告知本机限制 */}
-          {isSetup && (
-            <div className="mt-3 space-y-1.5 text-[10px] leading-relaxed text-muted/70">
-              <p>
-                出于安全考虑, 首次设置密码需在服务器本机或内网访问时操作。公网环境下仅可登录。
-              </p>
-            </div>
-          )}
+          <div className="mt-4 flex items-center justify-between text-[11px] text-muted">
+            {mode === 'login' ? (
+              <>
+                <span>
+                  还没有账号？{' '}
+                  <button type="button" onClick={() => go('register')} className="text-accent underline-offset-2 hover:underline">
+                    免费注册
+                  </button>
+                </span>
+                <button type="button" onClick={() => go('forgot')} className="underline-offset-2 hover:underline hover:text-foreground">忘记密码？</button>
+              </>
+            ) : mode === 'register' || mode === 'verify' ? (
+              <button
+                type="button"
+                onClick={() => (mode === 'verify' ? navigate('/', { replace: true }) : go('login'))}
+                className="inline-flex items-center gap-1 text-accent underline-offset-2 hover:underline"
+              >
+                <ArrowLeft className="h-3 w-3" />{mode === 'verify' ? '跳过，直接进入（稍后验证）' : '已有账号？去登录'}
+              </button>
+            ) : (
+              <button type="button" onClick={() => go('login')} className="inline-flex items-center gap-1 text-accent underline-offset-2 hover:underline">
+                <ArrowLeft className="h-3 w-3" />返回登录
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="mt-4 flex items-center justify-center gap-1.5 text-[10px] text-muted/60">

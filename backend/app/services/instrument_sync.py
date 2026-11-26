@@ -79,6 +79,7 @@ def sync_instruments(data_dir: Path) -> int:
     返回写入的行数。
     """
     all_rows = _fetch_instruments_via_provider()
+    failed_exchanges: list[str] = []
     if all_rows is None:
         # 未命中非 tickflow provider → 走 tickflow 直连
         tf = get_client()
@@ -92,12 +93,18 @@ def sync_instruments(data_dir: Path) -> int:
                     all_rows.extend(_flatten_instruments(items, current_limits=current_limits))
                     logger.info("instruments %s: %d stocks", ex, len(items))
             except Exception as e:
+                failed_exchanges.append(ex)
                 logger.warning("get_instruments(%s) failed: %s", ex, e)
 
     if not all_rows:
         return 0
 
     df = pl.DataFrame(all_rows)
+    if failed_exchanges:
+        # 单交易所 503/超时时不能把整张维表缩成剩余交易所的子集:
+        # 盘后管道按维表解析标的池, 少一个交易所会让该市场当天日K整体缺失。
+        # 这里用历史维表补回失败交易所的行, 成功交易所仍正常更新。
+        df = _carry_over_failed_exchanges(df, data_dir, failed_exchanges)
     df = _preserve_instrument_fields(df, data_dir)
     df = df.with_columns(pl.lit(cn_today()).alias("as_of"))
 
@@ -116,6 +123,41 @@ def sync_instruments(data_dir: Path) -> int:
 _SHARE_FIELDS = (
     "listing_date", "total_shares", "float_shares", "tick_size",
 )
+
+
+def _carry_over_failed_exchanges(
+    df: pl.DataFrame, data_dir: Path, failed_exchanges: list[str],
+) -> pl.DataFrame:
+    """用历史维表补回获取失败的交易所行, 避免部分维表覆盖全量。"""
+    path = data_dir / "instruments" / "instruments.parquet"
+    if not path.exists():
+        logger.warning(
+            "instruments 同步部分失败 (%s) 且无历史维表, 先写入 %d 行",
+            "/".join(failed_exchanges), df.height,
+        )
+        return df
+    if "exchange" not in df.columns:
+        return df
+    try:
+        existing = pl.read_parquet(path)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("instruments 历史维表读取失败, 无法补回失败交易所: %s", e)
+        return df
+    if "exchange" not in existing.columns:
+        return df
+
+    fetched = set(df["symbol"].drop_nulls().to_list())
+    carried = existing.filter(
+        pl.col("exchange").is_in(failed_exchanges)
+        & ~pl.col("symbol").is_in(fetched)
+    )
+    if carried.is_empty():
+        return df
+    logger.warning(
+        "instruments 同步部分失败 (%s): 从历史维表补回 %d 行",
+        "/".join(failed_exchanges), carried.height,
+    )
+    return pl.concat([df, carried], how="diagonal_relaxed")
 
 
 def _preserve_instrument_fields(df: pl.DataFrame, data_dir: Path) -> pl.DataFrame:

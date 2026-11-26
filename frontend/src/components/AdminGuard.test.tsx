@@ -53,11 +53,12 @@ it('未登录时把 /admin 送去登录页, 不渲染后台内容', async () => 
   expect(host.querySelector('[data-testid="login-page"]')).not.toBeNull()
 })
 
-it('已登录但不是管理员时退回看板', async () => {
+it('已登录但不是管理员时展示无权限态, 不静默跳走', async () => {
   sessionState.current = { loading: false, authenticated: true, isAdmin: false, user: { role: 'free' } }
   await render()
   expect(host.querySelector('[data-testid="admin-body"]')).toBeNull()
-  expect(host.querySelector('[data-testid="home"]')).not.toBeNull()
+  expect(host.querySelector('[data-testid="home"]')).toBeNull()
+  expect(host.textContent).toContain('无后台管理权限')
 })
 
 it('管理员登录后才渲染后台内容', async () => {

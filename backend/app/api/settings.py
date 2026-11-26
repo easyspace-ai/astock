@@ -14,7 +14,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import secrets_store
-from app.api.permissions import guard_settings_access, is_admin
+from app.api.permissions import guard_settings_access, has_permission, is_admin
+from app.services import rbac
 from app.data_providers.custom.config import MAX_TIMEOUT
 from app.tickflow import client as tf_client
 from app.tickflow.policy import (
@@ -69,10 +70,8 @@ def get_settings(request: Request = None) -> dict:
 
     def _onboarding_completed() -> bool:
         me = getattr(request.state, "user", None) if request is not None else None
-        if me is not None:
-            from app.services import user_store
-            if user_store.effective_role(me) != user_store.ROLE_ADMIN:
-                return True
+        if me is not None and not is_admin(request):
+            return True
         return preferences.get_onboarding_completed()
     from app.services.ai_provider import (
         ai_configured,
@@ -121,7 +120,7 @@ def get_settings(request: Request = None) -> dict:
         "ai_context_window": current_ai_context_window(),
         "ai_round_checkpoint": current_ai_round_checkpoint(),
     }
-    if request is not None and not is_admin(request):
+    if request is not None and not has_permission(request, rbac.ADMIN_SETTINGS_WRITE):
         # 普通用户只拿到界面运行必需的开关, 不下发密钥状态/数据源/端点等配置细节。
         # 注意: GET 下仍保留只读, 但返回体按角色裁剪, 避免"隐藏菜单但接口可读"。
         return {
@@ -443,15 +442,6 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
         "ai_context_window": current_ai_context_window(),
         "ai_round_checkpoint": current_ai_round_checkpoint(),
     }
-    if request is not None and not is_admin(request):
-        # 普通用户只拿到界面运行必需的开关, 不下发密钥状态/数据源/端点等配置细节。
-        # 注意: GET 下仍保留只读, 但返回体按角色裁剪, 避免"隐藏菜单但接口可读"。
-        return {
-            k: payload[k]
-            for k in ("onboarding_completed", "ai_configured", "has_ai_key", "ai_model")
-            if k in payload
-        }
-    return payload
 
 
 @router.delete("/ai")
@@ -748,7 +738,7 @@ def get_preferences(request: Request = None) -> dict:
         "ui_prefs": preferences.get_ui_prefs(),
         **preferences.get_mining_schedule(),
     }
-    if request is not None and not is_admin(request):
+    if request is not None and not has_permission(request, rbac.ADMIN_SETTINGS_WRITE):
         # 凭据类字段只对管理员下发; 普通用户仍可读界面偏好与公开开关。
         for key in (
             "feishu_webhook_url", "feishu_webhook_secret", "wecom_webhook_url",
@@ -768,6 +758,62 @@ def list_data_sources() -> dict:
         "errors": custom_sources.errors(),
         "config_dir": str(custom_sources.data_sources_dir()),
     }
+
+
+@router.get("/data-sources/health")
+def get_data_source_health() -> dict:
+    """数据源健康快照 (行情/公告/财务/新闻)。"""
+    from app.services import preferences, source_health
+
+    return source_health.snapshot(preferences.data_dir())
+
+
+class SourceHealthProbeIn(BaseModel):
+    scope: Literal["all", "market", "slow", "info", "realtime", "minute", "daily", "financial", "announcements", "news"] = "all"
+
+
+@router.post("/data-sources/health/probe")
+def probe_data_source_health(req: SourceHealthProbeIn) -> dict:
+    """立即探测; 阻塞返回本次结果。设置页用较短 scope 避免一次打太多请求。"""
+    from app.services import preferences, source_health
+
+    return source_health.probe_scope(preferences.data_dir(), req.scope)
+
+
+class ProviderFallbacksIn(BaseModel):
+    realtime: list[str] | None = None
+    financial: list[str] | None = None
+
+
+@router.get("/data-sources/fallbacks")
+def get_provider_fallbacks() -> dict:
+    from app.services import preferences
+
+    return {
+        "realtime": preferences.get_provider_fallbacks("realtime", preferences.get_realtime_data_provider()),
+        "financial": preferences.get_provider_fallbacks("financial", preferences.get_financial_provider()),
+    }
+
+
+@router.put("/data-sources/fallbacks")
+def put_provider_fallbacks(req: ProviderFallbacksIn) -> dict:
+    """保存主备链; 只接受当前已注册的源, 空列表表示不做自动切换。"""
+    from app.data_providers import custom as custom_sources
+    from app.services import preferences
+
+    allowed = {"tickflow", *custom_sources.names()}
+    updates = req.model_dump(exclude_none=True)
+    for capability, chain in updates.items():
+        bad = [name for name in chain if str(name).lower() not in allowed]
+        if bad:
+            raise HTTPException(400, f"{capability} 含未注册数据源: {bad}")
+        updates[capability] = [str(name).lower() for name in chain]
+    current = preferences.load().get("provider_fallbacks") or {}
+    if not isinstance(current, dict):
+        current = {}
+    current.update(updates)
+    preferences.save({"provider_fallbacks": current})
+    return get_provider_fallbacks()
 
 
 @router.get("/capability-matrix")
@@ -2367,7 +2413,7 @@ def update_market_recap_prompt(req: MarketRecapPromptIn) -> dict:
 
 # ================================================================
 # API Token 管理 (open-platform-plan §4) — 仅 UI 会话可达
-# (挂在 /api/settings 前缀下, 受访问密码保护; Token 通道无对应 scope,
+# (挂在 /api/settings 前缀下, 受邮箱账号会话保护; Token 通道无对应 scope,
 #  网关规则表里没有本组端点, Bearer 调用会被 403 拒绝)
 # ================================================================
 class ApiTokenCreateIn(BaseModel):

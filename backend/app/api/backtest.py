@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.api.auth import COOKIE_NAME
+from app.api.accounts import COOKIE_NAME
 from app.config import settings
 from app.enriched_generation import EnrichedGenerationUnavailableError
 from app.market_time import cn_today

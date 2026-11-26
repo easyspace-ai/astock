@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useAccountUser } from '@/lib/useAccount'
+import { useAccountUser, userHasPermission } from '@/lib/useAccount'
+import { PERM } from '@/lib/permissions'
 import { motion } from 'framer-motion'
 import { useQuoteStream, useQuoteStreamStatus } from '@/lib/useQuoteStream'
 import { ToastContainer, toast } from '@/components/Toast'
@@ -73,10 +74,9 @@ export function Layout() {
   // ===== 共享 hooks (替代内联 useQuery) =====
   const { data: settingsState } = useSettings()
   const { data: prefs } = usePreferences()
-  // 角色: 旧访问密码模式(无账号会话)视为管理员, 普通邮箱账号只看功能页
+  // 角色: 按 admin.access 权限码判断; 账号数据未就绪时先按普通用户渲染
   const account = useAccountUser()
-  // 加载中先按普通用户渲染, 避免管理员界面闪现; 旧密码模式(me=null)加载后放行全部配置。
-  const isAdmin = account.isLoading ? false : (!account.data || account.data.role === 'admin')
+  const isAdmin = account.isLoading ? false : userHasPermission(account.data, PERM.adminAccess)
   // 批量端点单请求上限 = 前端分块大小 (与后端校验同源, 见 lib/klineBatchLimits)。
   // 在渲染期写入而非 effect: 分块助手在子组件 queryFn 内调用, 而 queryFn 早于
   // 父组件 effect 触发 —— 用 effect 会让首轮请求仍按默认值分块。幂等, 无状态更新。
@@ -111,9 +111,13 @@ export function Layout() {
   const [watchlistNavExpanded, setWatchlistNavExpanded] = useState(location.pathname === '/watchlist')
 
   const allNav = getNavigationEntries(analysisMenus?.items ?? [])
+  // 页面级权限：无权限的页面不进导航（必须在套用 nav_layout 用户偏好之前过滤，
+  // 否则旧布局里的页面 id 会绕过权限重新出现）。
+  const canPage = (perm: string) => !account.isLoading && userHasPermission(account.data, perm)
+  const permittedNav = allNav.filter(item => !item.perm || canPage(item.perm))
   const navById = new Map(allNav.map(item => [item.id, item]))
-  const layout = resolveNavLayout(prefs?.nav_layout, allNav, prefs?.nav_order)
-  const visibleLayout = visibleNavLayout(layout, allNav, prefs?.nav_hidden ?? [])
+  const layout = resolveNavLayout(prefs?.nav_layout, permittedNav, prefs?.nav_order)
+  const visibleLayout = visibleNavLayout(layout, permittedNav, prefs?.nav_hidden ?? [])
   // 后台功能与前台分离: 前台永远不展示配置/数据管理入口
   const ADMIN_ONLY_NAV = new Set(['/settings', '/admin', '/data', '/branding'])
   const frontItems: NavNode[] = []
@@ -547,6 +551,11 @@ export function Layout() {
         )}
 
         <nav className="tf-nav-scroll flex-1 min-h-0 overflow-y-auto px-2 pb-3 pt-2 space-y-0.5">
+          {visibleLayout.items.length === 0 && (
+            <div className="px-2 py-4 text-[11px] leading-5 text-muted">
+              当前账号没有被分配任何页面权限，请联系超级管理员调整权限组。
+            </div>
+          )}
           <NavPanel
             items={visibleLayout.items}
             navById={navById}

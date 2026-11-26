@@ -20,6 +20,7 @@ from app.services.data_integrity import (
     IntegrityIssue,
     _candidate_days,
     _is_snapshot,
+    _partition_snapshot_defects,
     _quote_ts_max_ms,
     _trading_calendar,
     earliest_issue_day,
@@ -68,6 +69,33 @@ def test_snapshot_predicate():
     assert _is_snapshot(FRIDAY, None) is False  # batch 历史 → 权威
 
 
+def test_mixed_partition_flags_intraday_rows_even_when_some_rows_after_cutoff(tmp_path):
+    """11-20 实况: 15:15~15:29 盘中快照 + 18:57 重启覆写都必须判坏。
+
+    旧逻辑只看 max(quote_ts) 会误判; 新逻辑逐 symbol 检查任何非空 quote_ts,
+    只要没有官方行(null)就算实时快照。三只 symbol 都应暴露。
+    """
+    part = tmp_path / "kline_daily" / f"date={FRIDAY.isoformat()}"
+    part.mkdir(parents=True)
+    pl.DataFrame({
+        "symbol": ["a", "b", "c"],
+        "date": [FRIDAY] * 3,
+        "open": [10.0] * 3,
+        "high": [10.1] * 3,
+        "low": [9.9] * 3,
+        "close": [10.0] * 3,
+        "volume": [100.0] * 3,
+        "amount": [1000.0] * 3,
+        "quote_ts": [
+            _ts_ms(FRIDAY, time(15, 15)),
+            _ts_ms(FRIDAY, time(15, 20)),
+            _ts_ms(FRIDAY, time(18, 57)),
+        ],
+    }).write_parquet(part / "part.parquet")
+    defects = _partition_snapshot_defects(FRIDAY, part, _quote_ts_max_ms(part))
+    assert defects == {"a", "b", "c"}
+
+
 def test_quote_ts_max_reads_partition_statistics(tmp_path):
     part = tmp_path / "date=2026-08-21"
     part.mkdir()
@@ -109,14 +137,21 @@ def test_midday_snapshot_partition_is_flagged(tmp_path):
 
 
 def test_close_final_snapshot_is_flagged(tmp_path):
-    """15:00 后的 close_final 定版也是实时写入 → 判坏 (完整以盘后管道 batch 覆盖为准)。"""
+    """15:00 后的 close_final、甚至 18:57 重启覆写都是实时写入 → 判坏。
+
+    完整以盘后管道 batch 覆盖为准; 只有 quote_ts=null 的官方行才算定版。
+    """
     _write_daily_partition(tmp_path, "kline_daily", FRIDAY, _ts_ms(FRIDAY, time(15, 1)))
     _write_daily_partition(tmp_path, "kline_daily", TODAY, _ts_ms(TODAY, time(10, 0)))
     issues = scan_recent_integrity(tmp_path, today=TODAY)
     assert issues and issues[0].kind == "snapshot"
 
-    # 过 15:30 定版线 (盘后固定价终止) 的极晚写入 → 完整
-    _write_daily_partition(tmp_path, "kline_daily", FRIDAY, _ts_ms(FRIDAY, time(15, 31)))  # 覆写同分区
+    # 18:57 重启再覆写同一分区, 仍不能被当成完整
+    _write_daily_partition(tmp_path, "kline_daily", FRIDAY, _ts_ms(FRIDAY, time(18, 57)))
+    assert scan_recent_integrity(tmp_path, today=TODAY)[0].kind == "snapshot"
+
+    # 只有官方 batch 行 (quote_ts=null) 才算完整
+    _write_daily_partition(tmp_path, "kline_daily", FRIDAY, None)
     assert scan_recent_integrity(tmp_path, today=TODAY) == []
 
 
@@ -623,7 +658,14 @@ def test_pipeline_self_heals_snapshot_day(tmp_path, monkeypatch):
             "start": start_date.date() if hasattr(start_date, "date") else start_date,
             "end": end_date.date() if hasattr(end_date, "date") else end_date,
         })
-        return 0
+        # 模拟官方 batch 成功: 用 quote_ts=null 的权威行覆盖修复范围,
+        # 这样盘后管道才能给今天打定版标记。
+        start = start_date.date() if hasattr(start_date, "date") else start_date
+        end = end_date.date() if hasattr(end_date, "date") else end_date
+        for d in (start, end):
+            if d:
+                _write_full_partition(tmp_path, "kline_daily", d, None)
+        return 750
 
     monkeypatch.setattr(kline_sync, "sync_and_persist_daily_batch", _fake_batch)
     # run_pipeline() 不传 data_dir 时读 settings.data_dir — 同步指到 tmp
@@ -672,6 +714,14 @@ def test_quotes_flush_partition_keeps_quote_ts_for_integrity_scan(tmp_path, monk
 
     monkeypatch.setattr(tf_client, "get_client", lambda: SimpleNamespace(quotes=_FakeQuotes))
     monkeypatch.setattr(kline_sync, "cn_today", lambda: FRIDAY)
+    # 实时写盘守卫按「北京今天」判断历史分区; 本用例构造的是历史快照,
+    # 必须把守卫的今天也对齐到 FRIDAY, 否则会被历史分区保护正确拒绝。
+    from app.services import finalization
+    monkeypatch.setattr(finalization, "cn_today", lambda: FRIDAY)
+    monkeypatch.setattr(
+        finalization, "cn_now",
+        lambda: datetime.combine(FRIDAY, time(15, 0), tzinfo=CN_TZ),
+    )
 
     repo = KlineRepository(DataStore(tmp_path))
     assert kline_sync.sync_daily_by_quotes(repo) == 1

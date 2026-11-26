@@ -13,6 +13,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from app.market_time import CN_TZ, cn_today
+from app.services import finalization
 from app.tickflow.capabilities import CapabilitySet
 from app.tickflow.repository import KlineRepository
 
@@ -79,30 +80,55 @@ def repair_integrity_issues(repo, capset, issues, *, backup_dir: Path, on_progre
                 emit("sync_daily", int(45 * target_index / max(len(targets), 1)),
                      f"获取 {target_day} 日K批次 {cur}/{total}", stage_pct=int(100 * cur / total) if total else 0)
 
-            frames = []
-            for incoming in kline_sync.iter_daily_frames(
-                symbols, capset, start_time=datetime.combine(target.day, datetime.min.time(), tzinfo=CN_TZ),
-                end_time=datetime.combine(target.day, datetime.max.time(), tzinfo=CN_TZ), asset_type=target.asset_type,
-                on_chunk_done=progress,
-            ):
-                if incoming.is_empty():
-                    continue
-                if not {"symbol", "date"}.issubset(incoming.columns):
-                    raise ValueError("数据源返回的日K缺少股票或日期字段")
-                incoming = incoming.with_columns(pl.col("date").cast(pl.Date, strict=False), pl.col("symbol").cast(pl.String))
-                incoming = incoming.filter((pl.col("date") == target.day) & pl.col("symbol").is_in(symbols))
-                if not incoming.is_empty():
-                    if not data_integrity.invalid_daily_rows(incoming, target.day).is_empty():
-                        raise ValueError(f"数据源返回的 {target.day} 日K仍异常, 未写入正式数据")
-                    frames.append(incoming)
-            frame = (pl.concat(frames, how="diagonal_relaxed").unique(subset=["symbol", "date"], keep="last")
-                     if frames else pl.DataFrame(schema={"symbol": pl.String, "date": pl.Date}))
+            def collect(batch, on_chunk=None, *, _target=target):
+                frames = []
+                for incoming in kline_sync.iter_daily_frames(
+                    batch, capset, start_time=datetime.combine(_target.day, datetime.min.time(), tzinfo=CN_TZ),
+                    end_time=datetime.combine(_target.day, datetime.max.time(), tzinfo=CN_TZ), asset_type=_target.asset_type,
+                    on_chunk_done=on_chunk,
+                ):
+                    if incoming.is_empty():
+                        continue
+                    if not {"symbol", "date"}.issubset(incoming.columns):
+                        raise ValueError("数据源返回的日K缺少股票或日期字段")
+                    incoming = incoming.with_columns(pl.col("date").cast(pl.Date, strict=False), pl.col("symbol").cast(pl.String))
+                    incoming = incoming.filter((pl.col("date") == _target.day) & pl.col("symbol").is_in(batch))
+                    if not incoming.is_empty():
+                        if not data_integrity.invalid_daily_rows(incoming, _target.day).is_empty():
+                            raise ValueError(f"数据源返回的 {_target.day} 日K仍异常, 未写入正式数据")
+                        frames.append(incoming)
+                return (pl.concat(frames, how="diagonal_relaxed").unique(subset=["symbol", "date"], keep="last")
+                        if frames else pl.DataFrame(schema={"symbol": pl.String, "date": pl.Date}))
+
+            frame = collect(symbols, progress)
             missing = required - set(frame["symbol"].to_list())
             confirmed = repo.daily_repair_nontrading_symbols(target.asset_type, target.day, sorted(missing))
             unresolved = missing - confirmed
+            if unresolved and (not frame.is_empty() or len(unresolved) <= 20):
+                # 数据源偶发空回包会让单只标的缺失; 先用缺失清单重试一次, 再判定失败。
+                # 仍缺才拒绝替换, 避免把一次瞬时抖动放大成整日修补失败。
+                # 全市场股票整体空回包不重试, 否则会把一次源故障放大成双倍全量拉取。
+                logger.warning("日K修补 %s %s 缺 %d 只, 重试一次", target.day, label, len(unresolved))
+                emit("sync_daily", int(45 * i / max(len(targets), 1)),
+                     f"{target.day} {label}日K 缺 {len(unresolved)} 只, 重试一次")
+                retry_total = len(unresolved)
+
+                def retry_progress(cur, total, *args, target_day=target.day, target_index=i, _retry_total=retry_total):
+                    emit("sync_daily", int(45 * target_index / max(len(targets), 1)),
+                         f"重试获取 {target_day} 日K {cur}/{_retry_total}",
+                         stage_pct=int(100 * cur / _retry_total) if _retry_total else 0)
+
+                retry_frame = collect(sorted(unresolved), retry_progress)
+                if not retry_frame.is_empty():
+                    frame = pl.concat([frame, retry_frame], how="diagonal_relaxed").unique(
+                        subset=["symbol", "date"], keep="last",
+                    )
+                missing = required - set(frame["symbol"].to_list())
+                confirmed = repo.daily_repair_nontrading_symbols(target.asset_type, target.day, sorted(missing))
+                unresolved = missing - confirmed
             if unresolved or (frame.is_empty() and not confirmed):
                 codes = ", ".join(sorted(unresolved)[:10])
-                if not frames:
+                if frame.is_empty():
                     raise ValueError(f"数据源未返回 {target.day} 的修补日K ({codes}), "
                                      "且无法确认原记录为非交易记录。请核对日K数据源的历史覆盖和权限, 原数据保持不变")
                 raise ValueError(f"{target.day} 缺少修补股票: {codes}, 原数据保持不变")
@@ -117,6 +143,8 @@ def repair_integrity_issues(repo, capset, issues, *, backup_dir: Path, on_progre
             emit("sync_daily", 45 + int(10 * i / max(len(targets), 1)), f"写入已校验的 {target.day} 修补日K")
             table = daily_dirname(target.asset_type)
             frame = pl.read_parquet(staging / table / f"date={target.day}/part.parquet")
+            # 重写前先移除旧定版标记: 避免旧标记把修补失败后的半成品误当已定版。
+            finalization.clear_finalized(root, table, target.day)
             repo.replace_daily_rows(target.asset_type, target.day, frame,
                                     symbols=list(target.symbols) if target.symbols is not None else None,
                                     backup_dir=backup_dir / table / f"date={target.day}",

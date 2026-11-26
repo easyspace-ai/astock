@@ -10,17 +10,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.api.permissions import require_permission
 from app.enriched_generation import EnrichedPublication
 from app.indicators.pipeline import ENRICHED_COLUMNS
+from app.services import rbac
 from app.services.data_status_cache import DataStatusCache
 from app.services.pipeline_jobs import job_store
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/data", tags=["data"])
+
+# 破坏性 / 诊断类数据操作: 只允许持有 admin.data_manage 的账号。
+# 页面权限(行情/看板)不等于数据管理权限, 清库/自检修补会改动全库共享数据。
+_REQUIRE_DATA_MANAGE = Depends(require_permission(rbac.ADMIN_DATA_MANAGE))
 
 
 @router.get("/workload")
@@ -102,7 +108,7 @@ def _start_integrity_job(request: Request, operation: Callable, *, repair: bool)
     return {"job_id": job_id}
 
 
-@router.get("/integrity")
+@router.get("/integrity", dependencies=[_REQUIRE_DATA_MANAGE])
 def get_integrity_report(request: Request) -> dict:
     from app.services import daily_health
     from app.services.integrity_check import latest_report
@@ -115,7 +121,7 @@ def get_integrity_report(request: Request) -> dict:
     }}
 
 
-@router.post("/integrity/scan")
+@router.post("/integrity/scan", dependencies=[_REQUIRE_DATA_MANAGE])
 def scan_integrity(body: IntegrityScanIn, request: Request) -> dict:
     from app.services.integrity_check import run_check
 
@@ -125,7 +131,7 @@ def scan_integrity(body: IntegrityScanIn, request: Request) -> dict:
     ), repair=False)
 
 
-@router.post("/integrity/repair")
+@router.post("/integrity/repair", dependencies=[_REQUIRE_DATA_MANAGE])
 def repair_integrity(body: IntegrityRepairIn, request: Request) -> dict:
     from app.data_providers import custom
     from app.services import preferences
@@ -671,7 +677,7 @@ async def status(request: Request) -> dict:
     }
 
 
-@router.post("/clear")
+@router.post("/clear", dependencies=[_REQUIRE_DATA_MANAGE])
 def clear_data(request: Request):
     """清除所有本地 Parquet 数据（保留 capabilities.json 和目录结构）。
 

@@ -6,9 +6,10 @@
 
 判据 (quote_ts 列, 毫秒 Unix 时间戳, 仅实时 flush 写入真实值):
 - null              → batch 拉取 / 盘后计算写入的权威历史 → 完整
-- d < 今天 且 时刻 < d 15:30 → 实时写入 (盘中快照或 close_final 定版) → 坏
-- d < 今天 且 时刻 ≥ d 15:30 → 完整 (仅理论可能: 盘后管道 15:35 前的极晚写入)
+- 任意非空 quote_ts (同一天内) → 实时路径写入, 不论 15:30 前后都不可信; 若该
+  symbol 没有官方行则记为缺陷 (2026-11-20 18:57 覆写即此类)
 - batch 权威行中仅夹杂少量零成交实时行 → 停牌残留 → 忽略
+- quote_ts 与分区日期不同 → 跨天脏数据, 不判快照
 - d == 今天         → 实时更新中, 属正常, 不校验
 - 分区缺失的候选日  → 缺口 (配置了 fuyao apikey → 按真实交易日检测;
   未配置 → 直接降级工作日近似; 节假日误报对修复只是空拉取, 但对
@@ -37,17 +38,19 @@ logger = logging.getLogger(__name__)
 
 # 尾盘定版线: 实时侧写入的分区一律不算定版 — 15:00 后的 close_final 定版也不
 # 可信 (实测有源"时间戳翻新但价格停在竞价前旧价"), 且 15:30 前科创/创业板盘后
-# 固定价交易仍在成交 (量未定版)。数据完整以盘后管道 (默认 15:35, 见
-# daily_pipeline) 的官方 batch 行覆盖为准; 定版线取盘后固定价终止线 15:30,
-# 与 quote_service._FINAL_DEADLINE 的 close_final 重试截止对齐 (15:30 后不再
-# 有新实时写入, 判 15:30 与判 15:35 等价)。
+# 固定价交易仍在成交 (量未定版)。数据完整以盘后管道 (默认 16:40) 的官方 batch
+# 行覆盖为准; CLOSE_CUTOFF 仅保留给 `_is_snapshot` 单时间戳辅助判断, 分区扫描
+# 已改为"任意非空 quote_ts 都不可信", 15:30 后不再放行。
 CLOSE_CUTOFF = dt_time(15, 30)
 
 # 扫描窗口: 最近 N 个自然日内、今天之前的交易日
 SCAN_WINDOW_DAYS = 7
 
 # 自动修复窗口: 最早坏日距今超过 N 个自然日 → 只报告不自动修 (更大缺口由用户手动 repair)
-AUTO_REPAIR_MAX_LAG_DAYS = 5
+# 生产环境不能因为一次长停机就永久放弃自动修复; 扫描窗口本身只有 7 天,
+# 这里放宽到 30 天, 让扫描窗口内的坏分区都能自动进入修复队列, 不再出现
+# "最早坏日 11-17 超过 5 天 → 整条自动修复直接 return" 的单点阻塞。
+AUTO_REPAIR_MAX_LAG_DAYS = 30
 
 # 参与检测的日K族表 (实时 flush 会写这三族的 daily/enriched)
 _DAILY_TABLES = ("kline_daily", "kline_etf_daily", "kline_index_daily")
@@ -273,16 +276,21 @@ def _partition_snapshot_defects(
     - 空集合    : 分区干净 (残留 symbol 均已有权威行, 或仅零成交残留且权威行占多数);
     - 非空集合  : 恰好这些 symbol 在窗口内写了有成交实时行且无权威行 → 只修它们。
     """
-    if not _is_snapshot(day, quote_ts_max_ms):
+    # 不能只看分区 max(quote_ts): 11-20 这类分区里仍有 15:15~15:29 的盘中快照行,
+    # 但个别股票在 18:57 被补写到当前时间; 用 max 判定会把整分区误判为"已定版",
+    # 盘后管道漏跑留下的半日快照因此被放过。这里下沉到逐 symbol 判定。
+    # 且任何非空 quote_ts 都是实时路径写的, 不再用"15:30 后算完整"放行:
+    # 18:57 重启后的 close_final 覆写与 15:15 快照一样不可信。
+    if quote_ts_max_ms is None:
         return set()
 
-    start_ms = int(datetime.combine(day, dt_time.min, tzinfo=CN_TZ).timestamp() * 1000)
-    cutoff_ms = int(datetime.combine(day, CLOSE_CUTOFF, tzinfo=CN_TZ).timestamp() * 1000)
+    day_start_ms = int(datetime.combine(day, dt_time.min, tzinfo=CN_TZ).timestamp() * 1000)
+    day_end_ms = day_start_ms + 86_400_000
     authoritative_rows = 0
     suspicious_rows = 0
     authoritative_symbols: set[str] = set()
-    suspicious_symbols: set[str] = set()  # 窗口内实时行的 symbol (含零成交)
-    active_symbols: set[str] = set()  # 窗口内且有成交的实时行 symbol
+    suspicious_symbols: set[str] = set()  # 实时行的 symbol (含零成交)
+    active_symbols: set[str] = set()  # 有成交的实时行 symbol
 
     for path in sorted(part_dir.glob("*.parquet")):
         try:
@@ -302,7 +310,8 @@ def _partition_snapshot_defects(
             if has_symbol:
                 authoritative_symbols.update(authoritative["symbol"].drop_nulls().to_list())
             suspicious = frame.filter(
-                pl.col("quote_ts").is_between(start_ms, cutoff_ms, closed="left")
+                pl.col("quote_ts").is_not_null()
+                & pl.col("quote_ts").is_between(day_start_ms, day_end_ms, closed="left")
             )
             if suspicious.is_empty():
                 continue
@@ -690,6 +699,16 @@ def launch_integrity_repair(
                 report = run_repair(repo, capset, report["id"], on_progress=progress)
             return {"integrity_report": report}
 
+    def _emit_alert(event_type: str, severity: str, title: str, message: str,
+                    data: dict | None = None) -> None:
+        try:
+            from app.services.system_alert import emit
+
+            emit(event_type, severity, title, message,
+                 dedupe_key="integrity_repair", data=data or {})
+        except Exception:  # noqa: BLE001
+            logger.debug("integrity repair 告警发送失败", exc_info=True)
+
     def _execute() -> None:
         try:
             if not try_acquire_run_slot(job_id):
@@ -698,13 +717,28 @@ def launch_integrity_repair(
             result = run_with_capacity(job_id, _run)
             if isinstance(result, dict) and "error" in result:
                 job_store.fail(job_id, str(result["error"]))
+                _emit_alert(
+                    "integrity_repair_failed", "warn", "数据完整性自动修复失败",
+                    f"job_id={job_id} 修复未完成: {result['error']}",
+                    {"job_id": job_id, "result": result},
+                )
             else:
                 job_store.succeed(job_id, result)
+                _emit_alert(
+                    "integrity_repair_recovered", "info", "数据完整性自动修复完成",
+                    f"job_id={job_id} 修复完成",
+                    {"job_id": job_id, "result": result},
+                )
         except JobCancelledError:
             pass  # 已由 terminate() 标记失败
         except Exception as e:  # noqa: BLE001
             logger.exception("integrity repair failed: job_id=%s", job_id)
             job_store.fail(job_id, str(e))
+            _emit_alert(
+                "integrity_repair_failed", "critical", "数据完整性自动修复异常",
+                f"job_id={job_id} 修复异常: {type(e).__name__}: {e}",
+                {"job_id": job_id},
+            )
         finally:
             release_run_slot(job_id)
             with contextlib.suppress(Exception):

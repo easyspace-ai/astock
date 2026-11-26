@@ -79,6 +79,23 @@ def test_repair_fetches_only_bad_symbol_and_day_and_preserves_other_rows(env):
     assert result["status"] == "clean"
 
 
+def test_transient_empty_source_retries_missing_symbol(env, monkeypatch):
+    calls = []
+
+    def fetch(symbols, capset, *, start_time, end_time, asset_type="stock", on_chunk_done=None):
+        calls.append(list(symbols))
+        if len(calls) == 1:
+            yield pl.DataFrame()
+        else:
+            yield frame(BAD_DAY, (A,), (10.0,))
+
+    monkeypatch.setattr(kline_sync, "iter_daily_frames", fetch)
+    report = integrity_check.run_check(env.root, asset_types=["stock"])
+    result = integrity_check.run_repair(env.repo, env.caps, report["id"])
+    assert calls == [[A], [A]]
+    assert result["status"] == "clean"
+
+
 @pytest.mark.parametrize("empty", [False, True])
 def test_failed_source_validation_never_changes_raw_or_enriched(env, monkeypatch, empty):
     from app.indicators import pipeline

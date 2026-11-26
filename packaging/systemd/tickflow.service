@@ -1,0 +1,33 @@
+[Unit]
+# TSP 主服务（Python · FastAPI）
+# 安装：sudo cp packaging/systemd/tickflow.service /etc/systemd/system/
+#       sudo systemctl daemon-reload && sudo systemctl enable --now tickflow
+# 按实际部署调整 WorkingDirectory / ExecStart / 用户与数据目录。
+Description=TSP TickFlow backend (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 建议使用非 root 专用用户；如源码部署可改为部署账号。
+User=tsp
+Group=tsp
+WorkingDirectory=/opt/tsp/backend
+# 源码模式示例；Docker 部署不需要本 unit。
+ExecStart=/opt/tsp/backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 3018
+Restart=on-failure
+RestartSec=3
+StartLimitBurst=5
+StartLimitIntervalSec=300
+# 资源上限（按机器规格调整）
+MemoryMax=2G
+LimitNOFILE=65536
+# 数据与配置目录（与 .env 的 DATA_DIR 一致）
+Environment=DATA_DIR=/opt/tsp/data
+Environment=TZ=Asia/Shanghai
+# 日志走 journald：journalctl -u tickflow -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

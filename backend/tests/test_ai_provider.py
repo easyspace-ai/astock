@@ -569,7 +569,7 @@ def test_codex_process_env_excludes_application_secrets(monkeypatch, tmp_path):
     monkeypatch.setenv("TICKFLOW_API_KEY", "tickflow-secret")
     monkeypatch.setenv("AI_API_KEY", "ai-secret")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
-    monkeypatch.setenv("AUTH_PASSWORD", "password-secret")
+    monkeypatch.setenv("APP_SECRET", "password-secret")
     # 隔离宿主: _read_codex_config 直读 ~/.codex/config.toml, 宿主若配了
     # env_key provider 且同名环境变量在, 凭证会漏进 env, 断言随机翻红
     monkeypatch.setattr(ai_provider, "_read_codex_config", lambda: {})
@@ -583,7 +583,7 @@ def test_codex_process_env_excludes_application_secrets(monkeypatch, tmp_path):
     assert "TICKFLOW_API_KEY" not in env
     assert "AI_API_KEY" not in env
     assert "OPENAI_API_KEY" not in env
-    assert "AUTH_PASSWORD" not in env
+    assert "APP_SECRET" not in env
 
 
 def test_codex_process_env_injects_provider_env_key(monkeypatch, tmp_path):

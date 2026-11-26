@@ -23,13 +23,14 @@ def test_registered_codex_probe_route_returns_json_before_static_fallback(monkey
 
     from app.main import app
 
-    monkeypatch.setattr("app.services.auth.is_configured", lambda: False)
-    monkeypatch.setattr("app.api.auth._is_local_network", lambda ip: True)
     # 账号体系: 一旦本机 data 目录已有注册用户, 中间件就要求登录(401)。
     # 本测试只验证探针路由先于静态兜底返回 JSON, 故显式置为「未初始化」环境,
     # 不依赖运行者本机的用户库状态。
+    from app.api import accounts as accounts_api
     from app.services import user_store
     monkeypatch.setattr(user_store, "has_users", lambda: False)
+    # TestClient 的 peer 固定为 "testclient", 未初始化环境按本机放行
+    monkeypatch.setattr(accounts_api, "_is_local_network", lambda _ip: True)
     monkeypatch.setattr(secrets_store, "get_ai_key", lambda: "")
     probe = AsyncMock(return_value="OK", side_effect=RuntimeError(failure) if failure else None)
     monkeypatch.setattr(ai_provider, "_probe_codex_cli", probe)

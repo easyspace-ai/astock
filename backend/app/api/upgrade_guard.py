@@ -8,13 +8,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from app.api.permissions import require_admin
+from app.api.permissions import require_permission
+from app.services import rbac
 from pydantic import BaseModel, Field
 
 from app.services.upgrade_guard import UpgradeGuard, UpgradeGuardBusyError
 
 router = APIRouter(prefix="/api/upgrade-guard", tags=["upgrade-guard"],
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_permission(rbac.ADMIN_SETTINGS_WRITE))],
 )
 
 

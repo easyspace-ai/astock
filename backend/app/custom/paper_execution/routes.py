@@ -9,9 +9,11 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.api.permissions import require_page_access
+from app.services import rbac
 from app.services.screener import ScreenerService
 from app.strategy import paper_watch
 
@@ -106,7 +108,10 @@ def build_router() -> APIRouter:
             service = None
 
     router = APIRouter(
-        prefix="/api/custom/paper-execution", tags=["custom-paper-execution"], lifespan=lifespan
+        prefix="/api/custom/paper-execution",
+        tags=["custom-paper-execution"],
+        lifespan=lifespan,
+        dependencies=[Depends(require_page_access(rbac.PAGE_ANALYSIS))],
     )
 
     def require_service() -> ExecutionService:
