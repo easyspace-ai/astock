@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Archive, ArchiveRestore, Plus, Settings2, Trash2, Zap } from 'lucide-react'
@@ -52,8 +52,13 @@ function SignalsBody({ highlight }: { highlight: string }) {
   const allSignals = list.data?.signals ?? []
   const archivedSignals = allSignals.filter(sig => sig.archived)
   // 信号库隐藏已归档, 档案库只看已归档 — 归档可逆, 不删除定义、不影响已引用它的策略
-  const signals = view === 'archive' ? archivedSignals : allSignals.filter(sig => !sig.archived)
-  const enabledCustomSignals = signals.filter(sig => sig.enabled).length
+  const signalRows = view === 'archive' ? archivedSignals : allSignals.filter(sig => !sig.archived)
+  // 内置(共享层)信号只读: 排在后面, 卡片上只给「内置·只读」标记, 不给写入口
+  const mineSignals = signalRows.filter(sig => !sig.read_only)
+  const builtinSignals = signalRows.filter(sig => sig.read_only)
+  const signals = [...mineSignals, ...builtinSignals]
+  const builtinStart = mineSignals.length
+  const enabledCustomSignals = signalRows.filter(sig => sig.enabled).length
 
   useEffect(() => () => {
     if (resetDeleteTimer.current) clearTimeout(resetDeleteTimer.current)
@@ -152,8 +157,15 @@ function SignalsBody({ highlight }: { highlight: string }) {
       <AnchorWrap highlight={highlight} anchor="signals">
         <section className="rounded-card border border-border bg-surface p-4">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            {signals.map(sig => (
-              <div key={sig.id} className="rounded-card border border-border bg-base p-4">
+            {signals.map((sig, index) => (
+              <Fragment key={sig.id}>
+                {index === 0 && mineSignals.length > 0 && builtinSignals.length > 0 && (
+                  <div className="text-[11px] font-medium text-muted md:col-span-2">我的信号 · {mineSignals.length}</div>
+                )}
+                {index === builtinStart && builtinSignals.length > 0 && (
+                  <div className="text-[11px] font-medium text-muted md:col-span-2">内置信号 · 只读 · {builtinSignals.length}</div>
+                )}
+              <div className="rounded-card border border-border bg-base p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
@@ -161,6 +173,7 @@ function SignalsBody({ highlight }: { highlight: string }) {
                       <span className={`rounded px-1.5 py-0.5 text-[10px] ${KIND_CLASS[sig.kind]}`}>
                         {KIND_LABEL[sig.kind]}
                       </span>
+                      {sig.read_only && <span className="rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted">内置</span>}
                       {!sig.enabled && <span className="rounded bg-muted/10 px-1.5 py-0.5 text-[10px] text-muted">已停用</span>}
                       {sig.archived && <span className="rounded bg-muted/15 px-1.5 py-0.5 text-[10px] text-muted">已归档</span>}
                     </div>
@@ -169,6 +182,9 @@ function SignalsBody({ highlight }: { highlight: string }) {
                       <p className="mt-1 text-[10px] text-muted/80">归档于 {sig.archived_at.slice(0, 16).replace('T', ' ')}</p>
                     )}
                   </div>
+                  {sig.read_only ? (
+                    <span className="shrink-0 text-[10px] text-muted">内置 · 只读</span>
+                  ) : (
                   <div className="flex shrink-0 items-center gap-1">
                     {sig.archived ? (
                       <button
@@ -215,6 +231,7 @@ function SignalsBody({ highlight }: { highlight: string }) {
                       </button>
                     )}
                   </div>
+                  )}
                 </div>
                 <div className="mt-3 space-y-1">
                   {sig.conditions.map((c, i) => (
@@ -231,6 +248,7 @@ function SignalsBody({ highlight }: { highlight: string }) {
                   ))}
                 </div>
               </div>
+              </Fragment>
             ))}
             {list.isLoading &&
               Array.from({ length: 2 }).map((_, i) => (

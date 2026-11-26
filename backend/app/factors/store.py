@@ -6,6 +6,7 @@ draft → active → watch → retired (P4 状态机, 存储字段就绪, 迁移
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime
@@ -21,6 +22,8 @@ from app.factors.registry import (
     get_factor,
     register_factor,
 )
+from app.services import tenant
+from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -32,17 +35,88 @@ STATUSES = frozenset({"draft", "active", "watch", "retired"})
 _STORE = JsonDefinitionStore("user_data/custom_factors", label="custom factor")
 
 
+def _account_dir(data_dir: Path, uid: int) -> Path:
+    d = Path(data_dir) / "user_data" / "users" / str(uid) / "custom_factors"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _existing_account_dirs(data_dir: Path) -> list[tuple[int, Path]]:
+    base = Path(data_dir) / "user_data" / "users"
+    if not base.is_dir():
+        return []
+    out: list[tuple[int, Path]] = []
+    for d in sorted(base.iterdir()):
+        if not d.is_dir() or not d.name.isdigit():
+            continue
+        p = d / "custom_factors"
+        if p.is_dir():
+            out.append((int(d.name), p))
+    return out
+
+
+def _read_dir(directory: Path) -> list[dict]:
+    out: list[dict] = []
+    for f in sorted(directory.glob("*.json")):
+        try:
+            out.append(json.loads(f.read_text(encoding="utf-8")))
+        except Exception as e:  # noqa: BLE001 — 单文件损坏只跳过
+            logger.warning("custom factor load failed %s: %s", f.name, e)
+    return out
+
+
+def iter_owned(data_dir: Path) -> list[tuple[int | None, dict]]:
+    """(owner, 定义) 全量枚举; owner=None 为共享层。账号定义在前, 共享兜底。"""
+    out: list[tuple[int | None, dict]] = []
+    for uid, d in _existing_account_dirs(data_dir):
+        for definition in _read_dir(d):
+            out.append((uid, definition))
+    for definition in _STORE.load_all(data_dir):
+        out.append((None, definition))
+    return out
+
+
+def visible_owned(data_dir: Path) -> list[tuple[int | None, dict]]:
+    """用户可见范围: 自己的账号定义 + 共享层。他人账号的数据不返回。
+
+    `iter_owned` 是全量(共享 enriched 表需要全站并集), 但界面只能看自己的,
+    所以列表/详情一律走这里。
+    """
+    uid = tenant.current_user_id()
+    return [
+        (owner, item)
+        for owner, item in iter_owned(data_dir)
+        if owner is None or (uid is not None and owner == uid)
+    ]
+
+
 def load_all(data_dir: Path) -> list[dict]:
-    """读取全部自定义/复合因子定义; 损坏文件跳过。"""
-    return _STORE.load_all(data_dir)
+    """全部自定义/复合因子 (账号 + 共享并集); 损坏文件跳过。"""
+    return [definition for _owner, definition in iter_owned(data_dir)]
 
 
 def save_one(data_dir: Path, definition: dict) -> None:
-    _STORE.save_one(data_dir, definition)
+    """写入当前账号; 无账号上下文(全局模式/系统任务)写共享层。"""
+    uid = tenant.current_user_id()
+    if uid is None:
+        _STORE.save_one(data_dir, definition)
+        return
+    atomic_write_text(
+        _account_dir(data_dir, uid) / f"{definition['id']}.json",
+        json.dumps(definition, ensure_ascii=False, indent=2),
+    )
 
 
 def delete_one(data_dir: Path, factor_id: str) -> bool:
-    return _STORE.delete_one(data_dir, factor_id)
+    """只删自己账号那份; 无账号上下文时删共享层(单用户部署语义)。"""
+    uid = tenant.current_user_id()
+    if uid is None:
+        return _STORE.delete_one(data_dir, factor_id)
+    p = Path(data_dir) / "user_data" / "users" / str(uid) / "custom_factors" / f"{factor_id}.json"
+    if p.exists():
+        p.unlink()
+        return True
+    return False
 
 
 def _now() -> str:

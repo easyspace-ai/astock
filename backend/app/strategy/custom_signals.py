@@ -1,7 +1,8 @@
 """自定义信号 — 用户用「字段 + 运算符 + 值」组合出的布尔信号。
 
 职责:
-  - 从 data/user_data/custom_signals/*.json 加载信号定义
+  - 从共享层 data/user_data/custom_signals/*.json (内置种子) 与
+    各账号 data/user_data/users/<uid>/custom_signals/ 取并集加载信号定义
   - 把每个信号的 conditions 编译成一条 Polars 布尔表达式（AND 组合）
   - 供 pipeline 在 compute_signals / compute_enriched_today 末尾注入为列
 
@@ -15,6 +16,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -22,6 +24,8 @@ from pathlib import Path
 import polars as pl
 
 from app.definitions import DefinitionKind, JsonDefinitionStore, register_kind
+from app.services import tenant
+from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -135,29 +139,125 @@ def materialize_factor_columns(
 
 
 # ── 持久化（统一契约 Store, 镜像写法收口见 app/definitions.py）──
+# 两级目录: 共享层 (内置种子 + 无法定归属的历史文件) + 账号层。
+# 信号是 enriched 表的列, 全站共用一份历史缓存, 因此装载必须取并集 —
+# load_all 聚合两侧, 编译/依赖/命名等消费方无需感知账号。
 _STORE = JsonDefinitionStore("user_data/custom_signals", label="custom signal")
 
 
 def _dir(data_dir: Path) -> Path:
+    """共享层目录 (只在内置种子与全局模式下写入)。"""
     return _STORE.dir(data_dir)
 
 
+def _account_dir(data_dir: Path, uid: int) -> Path:
+    d = Path(data_dir) / "user_data" / "users" / str(uid) / "custom_signals"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _existing_account_dirs(data_dir: Path) -> list[tuple[int, Path]]:
+    """已存在的账号信号目录, 按 uid 升序 (不主动创建)。"""
+    base = Path(data_dir) / "user_data" / "users"
+    if not base.is_dir():
+        return []
+    out: list[tuple[int, Path]] = []
+    for d in sorted(base.iterdir()):
+        if not d.is_dir() or not d.name.isdigit():
+            continue
+        p = d / "custom_signals"
+        if p.is_dir():
+            out.append((int(d.name), p))
+    return out
+
+
+def _read_dir(directory: Path) -> list[dict]:
+    out: list[dict] = []
+    for f in sorted(directory.glob("*.json")):
+        try:
+            out.append(json.loads(f.read_text(encoding="utf-8")))
+        except Exception as e:  # noqa: BLE001 — 单文件损坏只跳过
+            logger.warning("custom signal load failed %s: %s", f.name, e)
+    return out
+
+
+def union_fingerprint(data_dir: Path) -> tuple:
+    """共享层 + 各账号层的目录指纹; 任一侧增删都让缓存重载。"""
+    fp: list = [("shared", _STORE.fingerprint(data_dir))]
+    for uid, d in _existing_account_dirs(data_dir):
+        try:
+            fp.append((uid, tuple(sorted((f.name, f.stat().st_mtime_ns) for f in d.glob("*.json")))))
+        except OSError:
+            fp.append((uid, ()))
+    return tuple(fp)
+
+
+def iter_owned(data_dir: Path) -> list[tuple[int | None, dict]]:
+    """(owner, 定义) 全量枚举; owner=None 为共享层。账号定义在前, 共享兜底。"""
+    out: list[tuple[int | None, dict]] = []
+    for uid, d in _existing_account_dirs(data_dir):
+        for sig in _read_dir(d):
+            out.append((uid, sig))
+    for sig in _STORE.load_all(data_dir):
+        out.append((None, sig))
+    return out
+
+
+def visible_owned(data_dir: Path) -> list[tuple[int | None, dict]]:
+    """用户可见范围: 自己的账号定义 + 共享层。他人账号的数据不返回。
+
+    `iter_owned` 是全量(共享 enriched 表需要全站并集), 但界面只能看自己的,
+    所以列表/详情一律走这里。
+    """
+    uid = tenant.current_user_id()
+    return [
+        (owner, item)
+        for owner, item in iter_owned(data_dir)
+        if owner is None or (uid is not None and owner == uid)
+    ]
+
+
 def load_all(data_dir: Path) -> list[dict]:
-    """读取全部自定义信号定义。损坏的文件被跳过。"""
-    return _STORE.load_all(data_dir)
+    """全部自定义信号 (账号 + 共享并集)。损坏的文件被跳过。"""
+    return [sig for _owner, sig in iter_owned(data_dir)]
 
 
 def load_one(data_dir: Path, signal_id: str) -> dict | None:
-    """读取单个信号定义; 不存在或损坏返回 None。"""
+    """读取单个信号定义: 先找当前账号, 再落回共享层。"""
+    uid = tenant.current_user_id()
+    if uid is not None:
+        p = Path(data_dir) / "user_data" / "users" / str(uid) / "custom_signals" / f"{signal_id}.json"
+        if p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("custom signal load failed %s: %s", signal_id, e)
+                return None
     return _STORE.load_one(data_dir, signal_id)
 
 
 def save_one(data_dir: Path, sig: dict) -> None:
-    _STORE.save_one(data_dir, sig)
+    """写入当前账号; 无账号上下文(全局模式/系统任务)写共享层。"""
+    uid = tenant.current_user_id()
+    if uid is None:
+        _STORE.save_one(data_dir, sig)
+        return
+    atomic_write_text(
+        _account_dir(data_dir, uid) / f"{sig['id']}.json",
+        json.dumps(sig, ensure_ascii=False, indent=2),
+    )
 
 
 def delete_one(data_dir: Path, signal_id: str) -> bool:
-    return _STORE.delete_one(data_dir, signal_id)
+    """只删自己账号那份; 无账号上下文时删共享层(单用户部署语义)。"""
+    uid = tenant.current_user_id()
+    if uid is None:
+        return _STORE.delete_one(data_dir, signal_id)
+    p = Path(data_dir) / "user_data" / "users" / str(uid) / "custom_signals" / f"{signal_id}.json"
+    if p.exists():
+        p.unlink()
+        return True
+    return False
 
 
 # ── 校验 ────────────────────────────────────────────────
@@ -714,7 +814,7 @@ def load_intraday_all(data_dir: Path) -> list[dict]:
     盘中评估与引擎注入每分钟执行, 不宜每次全量读盘; save/delete 端点
     调用 invalidate_intraday_cache() 主动失效。
     """
-    fp = _STORE.fingerprint(data_dir)
+    fp = union_fingerprint(data_dir)
     cached = _intraday_cache.get(data_dir)
     if cached is not None and cached[0] == fp:
         return cached[1]
@@ -761,7 +861,7 @@ def seed_if_empty(data_dir: Path) -> int:
     for sig in SEED_SIGNALS:
         if sig["id"] in existing:
             continue
-        save_one(data_dir, sig)
+        _STORE.save_one(data_dir, sig)
         written += 1
     marker.write_text(f"seeded: {written}\n", encoding="utf-8")
     return written
@@ -772,7 +872,7 @@ def signal_names(data_dir: Path) -> dict[str, str]:
 
     指纹含文件名 + mtime, 保存/删除信号后自动失效重载, 调用方无需配合失效。
     """
-    fp = _STORE.fingerprint(data_dir)
+    fp = union_fingerprint(data_dir)
     cached = _names_cache.get(data_dir)
     if cached is not None and cached[0] == fp:
         return cached[1]

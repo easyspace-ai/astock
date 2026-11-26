@@ -194,11 +194,11 @@ def _classify(rel: PurePosixPath, data_dir: Path) -> tuple[str, Path] | None:
         and parts[0] == "user_data"
         and parts[1] == "users"
         and parts[2].isdigit()
-        and parts[3] in _ACCOUNT_PRIVATE_FILES
+        and (parts[3] in _ACCOUNT_PRIVATE_FILES or parts[3] in ("custom_signals", "custom_factors"))
     ):
-        # 多账号私有数据: user_data/users/<uid>/{watchlist,reports,history}
+        # 多账号私有数据: user_data/users/<uid>/{watchlist,reports,history,custom_signals,custom_factors}
         # 恢复时按原相对路径落回同一账号目录, 不合并到全局。
-        return _ACCOUNT_PRIVATE_FILES[parts[3]], data_dir / Path(*parts)
+        return _ACCOUNT_PRIVATE_FILES.get(parts[3], parts[3]), data_dir / Path(*parts)
     if (
         len(parts) == 3
         and parts[0] == "user_data"
@@ -224,6 +224,15 @@ def _classify(rel: PurePosixPath, data_dir: Path) -> tuple[str, Path] | None:
         and parts[1] in ("custom_signals", "custom_factors", "monitor_rules")
         and _name_ok(parts[2], ".json")
     ):
+        # 信号/因子已按账号存: 旧备份条目(全局路径)在租户模式下落回当前账号,
+        # 不能写回共享层(共享层对所有账号只读)。
+        if parts[1] in ("custom_signals", "custom_factors") and tenant.is_tenant():
+            uid = tenant.current_user_id()
+            if uid is not None:
+                return (
+                    parts[1],
+                    data_dir / "user_data" / "users" / str(uid) / parts[1] / parts[2],
+                )
         return parts[1], data_dir / Path(*parts)
     if (
         len(parts) == 3
@@ -302,9 +311,9 @@ def _collect_backup_files(data_dir: Path) -> list[Path]:
     for sub in _STRATEGY_SOURCES:
         _glob(data_dir / "strategies" / sub, "*.py")
     for sub in ("strategy_overrides", "custom_signals", "custom_factors", "monitor_rules"):
-        # 策略调参已按账号存: 租户模式下只导出账号目录里的, 不把全局旧文件
-        # 当成本账号数据带出去(旧全局文件对所有账号都没有归属)。
-        if sub == "strategy_overrides" and tenant.is_tenant():
+        # 策略调参/信号/因子已按账号存: 租户模式下只导出账号目录里的, 不把全局
+        # 旧文件(共享层)当成本账号数据带出去 —— 它对所有账号都没有归属。
+        if sub in ("strategy_overrides", "custom_signals", "custom_factors") and tenant.is_tenant():
             continue
         _glob(data_dir / "user_data" / sub, "*.json")
     _glob(data_dir / "user_data" / "position_policies", "*.py")
@@ -333,6 +342,8 @@ def _collect_backup_files(data_dir: Path) -> list[Path]:
             _glob(user_dir / "lots", "lot_*.json")
             _glob(user_dir / "monitor_rules", "*.json")
             _glob(user_dir / "strategy_overrides", "*.json")
+            _glob(user_dir / "custom_signals", "*.json")
+            _glob(user_dir / "custom_factors", "*.json")
             acct_base = user_dir / "paper" / "accounts"
             if acct_base.is_dir():
                 for pattern in ("*.json", "*.jsonl"):

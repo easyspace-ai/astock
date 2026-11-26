@@ -171,10 +171,28 @@ def get_options():
 # ── 列表 ───────────────────────────────────────────────
 
 
+def _owner_of(data_dir, signal_id: str) -> tuple[bool, int | None]:
+    """定位信号归属: (是否存在, owner)。owner=None 为共享/内置层。"""
+    for owner, sig in custom_signals.iter_owned(data_dir):
+        if str(sig.get("id") or "") == signal_id:
+            return True, owner
+    return False, None
+
+
+def _shared_read_only() -> bool:
+    """有账号上下文时共享层(内置种子/无法定归属的旧文件)只读。"""
+    from app.services import tenant
+
+    return tenant.current_user_id() is not None
+
+
 @router.get("")
 def list_signals(request: Request):
-    sigs = custom_signals.load_all(_data_dir(request))
-    return {"signals": sigs}
+    data_dir = _data_dir(request)
+    signals = []
+    for owner, sig in custom_signals.visible_owned(data_dir):
+        signals.append({**sig, "owner": owner, "read_only": owner is None and _shared_read_only()})
+    return {"signals": signals}
 
 
 # ── 新建 / 更新 ────────────────────────────────────────
@@ -187,10 +205,28 @@ def save_signal(req: SignalModel, request: Request):
         custom_signals.validate(sig)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    data_dir = _data_dir(request)
+    # 归属闸: 有账号时共享层不可改 (内置种子/旧全局文件); 他人账号的 id 不可占用。
+    exists, owner = _owner_of(data_dir, sig["id"])
+    if exists:
+        from app.services import tenant
+
+        uid = tenant.current_user_id()
+        if uid is not None and owner is None:
+            raise HTTPException(
+                status_code=403,
+                detail=f"信号 {sig['id']} 是内置/共享定义，不能修改；请新建自己的信号",
+            )
+        if uid is not None and owner is not None and owner != uid:
+            raise HTTPException(
+                status_code=409,
+                detail=f"该标识已被其他账号使用，请换一个: {sig['id']}",
+            )
+
     # 显式列名冲突闸: 两个定义输出同一列 (如改名另存仍带 signal_* column)
     # 会让后者静默覆盖前者的注入, 必须显式拒绝。
     if sig.get("column"):
-        for existing in custom_signals.load_all(_data_dir(request)):
+        for existing in custom_signals.load_all(data_dir):
             if existing["id"] != sig["id"] and (
                 existing.get("column") == sig["column"]
                 or (not existing.get("column") and f"csg_{existing['id']}" == sig["column"])
@@ -201,7 +237,7 @@ def save_signal(req: SignalModel, request: Request):
                 )
     # created_at / archived 治理: 新建补写; 编辑时载荷未携带的字段保留盘上原值
     # (时间不能漂移; 归档不能被缺省值静默翻转)。
-    existing_def = custom_signals.load_one(_data_dir(request), sig["id"])
+    existing_def = custom_signals.load_one(data_dir, sig["id"])
     prev_archived = bool(existing_def.get("archived")) if existing_def else False
     archived = req.archived if req.archived is not None else prev_archived
     sig["archived"] = archived
@@ -213,7 +249,7 @@ def save_signal(req: SignalModel, request: Request):
         sig["archived_at"] = None
     if not sig.get("created_at"):
         sig["created_at"] = (existing_def.get("created_at") if existing_def else None) or _now()
-    custom_signals.save_one(_data_dir(request), sig)
+    custom_signals.save_one(data_dir, sig)
     _invalidate(request)
     return {"ok": True, "signal": sig}
 
@@ -265,14 +301,22 @@ def _set_archived(signal_id: str, archived: bool, request: Request) -> dict:
     已引用它的策略/监控不受影响; 归档只影响管理界面与选择器的可见性。"""
     if not custom_signals.ID_RE.match(signal_id):
         raise HTTPException(status_code=400, detail="信号 id 非法")
-    sig = custom_signals.load_one(_data_dir(request), signal_id)
+    data_dir = _data_dir(request)
+    exists, owner = _owner_of(data_dir, signal_id)
+    if not exists:
+        raise HTTPException(status_code=404, detail="信号不存在")
+    if _shared_read_only() and owner is None:
+        raise HTTPException(
+            status_code=403, detail=f"信号 {signal_id} 是内置/共享定义，不能归档或恢复"
+        )
+    sig = custom_signals.load_one(data_dir, signal_id)
     if sig is None:
         raise HTTPException(status_code=404, detail="信号不存在")
     sig["archived"] = archived
     sig["archived_at"] = _now() if archived else None
     if not sig.get("created_at"):
         sig["created_at"] = _now()
-    custom_signals.save_one(_data_dir(request), sig)
+    custom_signals.save_one(data_dir, sig)
     return {"ok": True, "signal": sig}
 
 
@@ -293,8 +337,15 @@ def unarchive_signal(signal_id: str, request: Request):
 def delete_signal(signal_id: str, request: Request):
     if not custom_signals.ID_RE.match(signal_id):
         raise HTTPException(status_code=400, detail="信号 id 非法")
-    deleted = custom_signals.delete_one(_data_dir(request), signal_id)
-    if not deleted:
+    data_dir = _data_dir(request)
+    exists, owner = _owner_of(data_dir, signal_id)
+    if not exists:
+        raise HTTPException(status_code=404, detail="信号不存在")
+    if _shared_read_only() and owner is None:
+        raise HTTPException(
+            status_code=403, detail=f"信号 {signal_id} 是内置/共享定义，不能删除"
+        )
+    if not custom_signals.delete_one(data_dir, signal_id):
         raise HTTPException(status_code=404, detail="信号不存在")
     _invalidate(request)
     return {"ok": True}

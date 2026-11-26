@@ -79,7 +79,8 @@ def _strategy_rel_path(data_dir: Path, sdef: Any) -> str | None:
 def _signal_lookup(data_dir: Path) -> dict[str, dict]:
     """自定义信号定义的多键索引: id 与输出列名 (csg_*/显式 column) 都能命中。"""
     by_key: dict[str, dict] = {}
-    for sig in custom_signals.load_all(data_dir):
+    # 只索引「自己 + 共享层」的信号: 别人账号的信号不能被打包带走。
+    for _owner, sig in custom_signals.visible_owned(data_dir):
         sid = sig.get("id")
         if not sid:
             continue
@@ -135,7 +136,8 @@ def collect_resources(
     summary = BundleSummary(strategy_id=strategy_id, label=strategy_id)
     entries: dict[str, bytes] = {}
 
-    factor_defs = {str(d.get("id")): d for d in store.load_all(data_dir)}
+    # 同上: 只有自己 + 共享层的因子可被打包。
+    factor_defs = {str(d.get("id")): d for _owner, d in store.visible_owned(data_dir)}
     signal_lookup = _signal_lookup(data_dir)
     known_builtin_cols: frozenset[str] | None = None
 
@@ -717,7 +719,7 @@ def _signal_input_refs(definition: dict) -> frozenset[str]:
 def _analyze(resources: dict[str, dict]) -> dict[str, registry.FactorSpec]:
     """按包内+本机合并快照验证; 预览不执行策略源码、不更改全局注册表。"""
     data_dir = config_backup._data_dir()
-    local_factors = {f["id"]: f for f in store.load_all(data_dir)}
+    local_factors = {str(d["id"]): d for _owner, d in store.visible_owned(data_dir)}
     local_signals = _signal_lookup(data_dir)
     local_strategies: dict[str, list[Path]] = {}
     for source in ("custom", "ai", "composite"):
@@ -953,7 +955,7 @@ def _local_dependents(data_dir: Path) -> dict[str, list[str]]:
         signal = _match_signal(ref, signals) if ref.startswith(("csg_", "csgi_", "signal_")) else None
         return f"signal:{signal['id']}" if signal is not None else f"factor:{ref}"
 
-    for definition in store.load_all(data_dir):
+    for _owner, definition in store.visible_owned(data_dir):
         key = f"factor:{definition['id']}"
         labels[key] = str(definition.get("label") or definition["id"])
         try:

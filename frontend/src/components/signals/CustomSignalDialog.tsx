@@ -210,6 +210,9 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
                 <p className="text-[10px] text-muted/60 px-1">
                   每个操作数左侧的 <span className="text-foreground/70">最新</span> 按钮可点击切换为「前N日」(取 N 个交易日前的值)。例:收盘价(最新) &gt; 收盘价(前1日) = 上涨。带偏移的条件仅盘后/回测生效, 盘中实时跳过。
                 </p>
+                <p className="text-[10px] text-muted/60 px-1">
+                  新建/修改信号后，这条列会注入全站共享的指标表，下一次指标重建会比平时慢（分钟级）——共享表只有一份，这是按账号隔离后仍保留的固有成本。内置信号为只读，改动请另存为新标识。
+                </p>
               </div>
 
               {error && <div className="rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}

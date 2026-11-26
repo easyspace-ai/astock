@@ -1073,6 +1073,10 @@ export interface CustomSignal {
   archived_at?: string | null
   /** 创建时间 (旧定义可能缺失 → undefined, 排序时回退名称) */
   created_at?: string | null
+  /** 归属账号: null = 共享层(内置种子/旧全局文件), number = 该账号私有 */
+  owner?: number | null
+  /** 只读: 共享层在账号模式下不可编辑/归档/删除, 只能引用 */
+  read_only?: boolean
 }
 
 export interface CustomSignalFieldGroup {

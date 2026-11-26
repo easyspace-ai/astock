@@ -251,6 +251,44 @@ def _resolve_id(requested: str | None, label: str, prefix: str) -> str:
     return requested.strip() if requested and requested.strip() else _slugify_id(label, prefix)
 
 
+def _owner_of_factor(data_dir, factor_id: str) -> tuple[bool, int | None]:
+    """定位因子归属: (是否存在, owner)。owner=None 为共享层(内置/旧全局文件)。"""
+    for owner, definition in store.iter_owned(data_dir):
+        if str(definition.get("id")) == factor_id:
+            return True, owner
+    return False, None
+
+
+def _ensure_writable(data_dir, factor_id: str, *, action: str) -> None:
+    """有账号时共享层与别人的定义都不可改; 无租户(全局模式)保持可写。"""
+    from app.services import tenant
+
+    uid = tenant.current_user_id()
+    if uid is None:
+        return
+    exists, owner = _owner_of_factor(data_dir, factor_id)
+    if not exists:
+        return
+    if owner is None:
+        raise HTTPException(
+            status_code=403,
+            detail=f"因子 {factor_id} 是内置/共享定义，不能{action}；请新建自己的因子",
+        )
+    if owner != uid:
+        raise HTTPException(
+            status_code=409, detail=f"该标识已被其他账号使用，请换一个: {factor_id}"
+        )
+
+
+def _writable_target(data_dir, factor_id: str) -> dict:
+    """取可写目标定义: 不存在 404, 归属不可写 403/409。"""
+    _ensure_writable(data_dir, factor_id, action="修改")
+    for definition in store.load_all(data_dir):
+        if str(definition.get("id")) == factor_id:
+            return definition
+    raise HTTPException(status_code=404, detail=f"自定义因子不存在: {factor_id}")
+
+
 def _next_version(data_dir, factor_id: str) -> int:
     for definition in store.load_all(data_dir):
         if str(definition.get("id")) == factor_id:
@@ -293,6 +331,7 @@ def create_custom_factor(req: CustomFactorCreateRequest, request: Request) -> di
         "created_at": store._now(),
         "updated_at": store._now(),
     }
+    _ensure_writable(data_dir, factor_id, action="占用")  # id 撞别人/共享 → 403|409
     try:
         store.to_spec(definition)  # 先做 schema/id/编译校验
     except ValueError as exc:
@@ -311,6 +350,7 @@ def create_composite_factor(req: CompositeFactorCreateRequest, request: Request)
     """保存复合因子: 成员校验 + 循环引用检查 (无需试算, 值由成员物化路径计算)。"""
     data_dir = _data_dir(request)
     factor_id = _resolve_id(req.id, req.label, "cf")
+    _ensure_writable(data_dir, factor_id, action="占用")  # id 撞别人/共享 → 403|409
     definition = {
         "id": factor_id,
         "kind": "composite",
@@ -348,13 +388,7 @@ def update_custom_factor(factor_id: str, req: CustomFactorUpdateRequest, request
     公式变化时状态回 draft (生命周期语义: 编辑后需重新检验激活); 仅改名称/分组保留状态。
     """
     data_dir = _data_dir(request)
-    target = None
-    for definition in store.load_all(data_dir):
-        if str(definition.get("id")) == factor_id:
-            target = definition
-            break
-    if target is None:
-        raise HTTPException(status_code=404, detail=f"自定义因子不存在: {factor_id}")
+    target = _writable_target(data_dir, factor_id)
     if str(target.get("kind", "custom")) != "custom":
         raise HTTPException(status_code=400, detail=f"仅自定义因子支持公式编辑 (kind={target.get('kind')})")
     formula_changed = str(target.get("formula")) != req.formula
@@ -431,6 +465,7 @@ def _find_references(data_dir, factor_id: str) -> list[str]:
 def delete_custom_factor(factor_id: str, request: Request, force: bool = Query(default=False)) -> dict:
     """删除自定义/复合因子; 有引用时列出引用方并拒绝 (需 force)。"""
     data_dir = _data_dir(request)
+    _ensure_writable(data_dir, factor_id, action="删除")
     from app.factors.registry import get_factor
 
     # 引用检查必须排在存在性判定之前: 下面用来探测「盘上是否有定义」的
@@ -459,13 +494,7 @@ class FactorStatusRequest(BaseModel):
 def update_factor_status(factor_id: str, req: FactorStatusRequest, request: Request) -> dict:
     """生命周期状态迁移 (P4): draft->active->watch->retired, 编辑后回 draft。"""
     data_dir = _data_dir(request)
-    target = None
-    for definition in store.load_all(data_dir):
-        if str(definition.get("id")) == factor_id:
-            target = definition
-            break
-    if target is None:
-        raise HTTPException(status_code=404, detail=f"自定义因子不存在: {factor_id}")
+    target = _writable_target(data_dir, factor_id)
     target["status"] = req.status
     target["updated_at"] = store._now()
     try:
@@ -487,13 +516,7 @@ def _set_factor_archived(factor_id: str, archived: bool, request: Request) -> di
     """归档/恢复自定义或复合因子 (可逆): 只改标记位, 不注销注册表 ——
     已引用该因子的策略/信号/评分列照常计算, 归档只影响因子库与选择器可见性。"""
     data_dir = _data_dir(request)
-    target = None
-    for definition in store.load_all(data_dir):
-        if str(definition.get("id")) == factor_id:
-            target = definition
-            break
-    if target is None:
-        raise HTTPException(status_code=404, detail=f"自定义因子不存在: {factor_id}")
+    target = _writable_target(data_dir, factor_id)
     target["archived"] = archived
     target["archived_at"] = store._now() if archived else None
     target["updated_at"] = store._now()
@@ -520,13 +543,7 @@ def update_factor_group(factor_id: str, req: FactorGroupRequest, request: Reques
     group = req.group.strip()
     if not group:
         raise HTTPException(status_code=400, detail="分组名不能为空")
-    target = None
-    for definition in store.load_all(data_dir):
-        if str(definition.get("id")) == factor_id:
-            target = definition
-            break
-    if target is None:
-        raise HTTPException(status_code=404, detail=f"自定义因子不存在: {factor_id}")
+    target = _writable_target(data_dir, factor_id)
     target["group"] = group
     target["updated_at"] = store._now()
     try:
