@@ -20,7 +20,7 @@ export function DataIntegrityPanel({ hasCap, isRunning, job, defaultAssets, onSt
   const [confirm, setConfirm] = useState(false)
   const [limit, setLimit] = useState(50)
   const [ownJobId, setOwnJobId] = useState<string | null>(null)
-  const latest = useQuery({ queryKey: QK.dataIntegrity, queryFn: api.dataIntegrity })
+  const latest = useQuery({ queryKey: QK.dataIntegrity, queryFn: () => api.dataIntegrity() })
   const report = latest.data?.report
   const busy = isRunning
 

@@ -4359,11 +4359,13 @@ export const api = {
     ),
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
-  dataIntegrity: () => request<{
+  // 自检只允许 admin.data_manage (见 backend/app/api/data.py:111): 无此权限的账号
+  // 会拿到 403, 而它是 Layout 里 30 秒轮询的全局请求, 不静默就会每页反复弹错。
+  dataIntegrity: (opts?: { quiet?: boolean }) => request<{
     report: IntegrityReport | null
     blocking_assets?: IntegrityAsset[]
     data_revisions?: DailyDataRevisions
-  }>('/api/data/integrity'),
+  }>('/api/data/integrity', { quiet: opts?.quiet }),
   scanDataIntegrity: (lookbackDays: number, assetTypes: IntegrityAsset[]) =>
     request<{ job_id: string }>('/api/data/integrity/scan', {
       method: 'POST', body: JSON.stringify({ lookback_days: lookbackDays, asset_types: assetTypes }),

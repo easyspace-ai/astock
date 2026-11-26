@@ -6,7 +6,9 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { api } from './api'
+import { PERM } from './permissions'
 import { QK } from './queryKeys'
+import { useAccountUser, userHasPermission } from './useAccount'
 
 // ===== 全局共享 =====
 
@@ -44,11 +46,18 @@ export function useSettings() {
 
 /** 自检状态及修补版本。与数据页共用查询, SSE 主动刷新, 全局挂载处轮询兜底。 */
 export function useDailyIntegrity(opts?: { poll?: boolean }) {
+  // GET /api/data/integrity 只放行 admin.data_manage; 这里是 Layout 全局挂载的
+  // 30 秒轮询, 无权限就不发请求 (而不是发出去再 403), 并 quiet 兜住权限被中途
+  // 收回的情况 — 否则受限账号每页都会刷出错误提示。
+  const account = useAccountUser()
+  const canRead = !account.isLoading && userHasPermission(account.data, PERM.dataManage)
   return useQuery({
     queryKey: QK.dataIntegrity,
-    queryFn: api.dataIntegrity,
+    queryFn: () => api.dataIntegrity({ quiet: true }),
     staleTime: 10_000,
-    refetchInterval: opts?.poll ? 30_000 : false,
+    refetchInterval: opts?.poll && canRead ? 30_000 : false,
+    enabled: canRead,
+    retry: false,
   })
 }
 
