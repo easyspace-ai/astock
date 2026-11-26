@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.custom.info_hub import announcements, config, models, service, store
+from app.custom.info_hub import routes as info_routes
+from app.market_time import cn_now
+from app.services import rbac
 
 
 def _cn(**over):
@@ -130,3 +135,114 @@ def test_timeline_uses_by_code_history(tmp_path):
     result = svc.timeline("600519.SH", days=400)
     assert result["counts"].get("announcement") == 1
     assert json.dumps(result, ensure_ascii=False).find("贵州茅台") >= 0
+
+
+# ================================================================
+# 手动抓取: 页面权限放行 + 参数分档 + 单飞/冷却
+# ================================================================
+
+
+def _info_app(tmp_path, *, user: dict | None = None, perms: list[str] | None = None):
+    app = FastAPI()
+    app.state.data_dir = str(tmp_path)
+    if user is not None:
+        allowed = frozenset(perms or [])
+
+        @app.middleware("http")
+        async def _fake_account(request, call_next):
+            request.state.user = user
+            request.state.permissions = allowed
+            return await call_next(request)
+
+    app.include_router(info_routes.router)
+    return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _reset_trigger_gap():
+    """冷却表是进程级; 用例之间必须清干净, 否则后一个用例会吃到 429。"""
+    info_routes._LAST_TRIGGER.clear()
+    yield
+    info_routes._LAST_TRIGGER.clear()
+
+
+def test_manual_sync_allows_page_holder_with_recent_date(tmp_path):
+    today = cn_now().date()
+    client = _info_app(
+        tmp_path,
+        user={"email": "editor@example.com", "is_active": True, "perm_role": "editor"},
+        perms=[rbac.PAGE_EXT_INFO_ANNOUNCEMENTS],
+    )
+    resp = client.post("/api/info/sync", params={"kinds": "announcements", "date": today.isoformat(), "live": "false"})
+    assert resp.status_code == 200, resp.text
+    runs = store.recent_runs(tmp_path, 5)
+    # 运行日志带触发者, 便于定位"谁把源打挂"
+    assert runs[0]["actor"] == "editor@example.com"
+
+
+def test_manual_sync_blocks_heavy_operations_for_non_admin(tmp_path):
+    client = _info_app(
+        tmp_path,
+        user={"email": "editor@example.com", "is_active": True, "perm_role": "editor"},
+        perms=[rbac.PAGE_EXT_INFO_ANNOUNCEMENTS],
+    )
+    far = (cn_now().date() - timedelta(days=30)).isoformat()
+    assert client.post("/api/info/sync", params={"kinds": "announcements", "date": far}).status_code == 403
+    assert client.post("/api/info/sync", params={"kinds": "announcements", "force": "true"}).status_code == 403
+    assert client.post("/api/info/sync", params={"kinds": "announcements", "legacy_root": "/tmp/x"}).status_code == 403
+
+
+def test_manual_sync_is_cooled_down_per_account(tmp_path):
+    client = _info_app(
+        tmp_path,
+        user={"email": "editor@example.com", "is_active": True, "perm_role": "editor"},
+        perms=[rbac.PAGE_EXT_INFO_ANNOUNCEMENTS],
+    )
+    assert client.post("/api/info/sync", params={"kinds": "announcements"}).status_code == 200
+    second = client.post("/api/info/sync", params={"kinds": "announcements"})
+    assert second.status_code == 429
+    assert int(second.headers["Retry-After"]) > 0
+
+
+def test_manual_sync_returns_409_while_another_run_holds_lock(tmp_path):
+    client = _info_app(
+        tmp_path,
+        user={"email": "editor@example.com", "is_active": True, "perm_role": "editor"},
+        perms=[rbac.PAGE_EXT_INFO_ANNOUNCEMENTS],
+    )
+    lock = service._sync_lock(tmp_path)
+    lock.acquire()
+    try:
+        resp = client.post("/api/info/sync", params={"kinds": "announcements"})
+        assert resp.status_code == 409
+    finally:
+        lock.release()
+    # 没真正跑起来的触发不该占用冷却名额
+    assert client.post("/api/info/sync", params={"kinds": "announcements"}).status_code == 200
+
+
+def test_sync_is_serialized_for_service_callers(tmp_path, monkeypatch):
+    """定时任务走 wait=True: 不会因为用户手动抓取而丢任务, 只是排队。"""
+    import threading
+
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow_fetch(data_dir, date=None):
+        started.set()
+        release.wait(2)
+        return {"date": date or "2026-11-26", "cninfo": 0, "em": 0, "errors": []}
+
+    from app.custom.info_hub import sources
+
+    monkeypatch.setattr(sources, "fetch_announcements", slow_fetch)
+    svc = service.service_for(tmp_path)
+    worker = threading.Thread(target=lambda: svc.sync(["announcements"], live=True, date="2026-11-26"))
+    worker.start()
+    assert started.wait(2)
+    with pytest.raises(service.SyncBusyError):
+        svc.sync(["announcements"], live=True, date="2026-11-26", wait=False)
+    release.set()
+    worker.join(3)
+    # 锁释放后可以继续排队执行
+    assert svc.sync(["announcements"], live=True, date="2026-11-26")["kinds"] == ["announcements"]

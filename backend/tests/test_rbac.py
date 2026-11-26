@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, Request
@@ -17,8 +18,9 @@ from starlette.requests import Request as StarletteRequest
 
 from app.api import accounts as accounts_api
 from app.api import admin_users as admin_users_api
+from app.api import navigation as navigation_api
 from app.api import permissions as permissions_api
-from app.services import rbac, user_store
+from app.services import menu_registry, rbac, user_store
 
 
 @pytest.fixture()
@@ -309,9 +311,202 @@ def test_ext_pages_bundle_allowed_for_page_permission(data_dir):
     permissions_api.guard_ext_pages_access(
         _request("GET", "/api/ext-pages/foo/bundle.js", editor)
     )
+    # 运行时页面插件清单是前端启动注册所需，持有扩展页权限即可读
+    permissions_api.guard_ext_pages_access(_request("GET", "/api/ext-pages", editor))
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException):
         permissions_api.guard_ext_pages_access(
             _request("POST", "/api/ext-pages/foo/install", editor)
         )
+
+
+# ================================================================
+# 统一菜单树 / 叶子权限目录
+# ================================================================
+def test_menu_tree_has_more_than_twenty_page_leaves():
+    menus = rbac.menu_nodes()
+    page_leaves = [m for m in menus if m["kind"] == "permission" and m["group"] == rbac.GROUP_PAGE]
+    assert len(page_leaves) == len(rbac.PAGE_KEYS) >= 24
+    # 分组节点不保存权限码
+    for node in menus:
+        if node["kind"] == "group":
+            assert node["key"].startswith("menu.") or node["key"].startswith("group.")
+
+
+def test_catalog_only_returns_leaf_permissions():
+    catalog = rbac.catalog()
+    keys = {p["key"] for p in catalog}
+    assert all(not p["key"].startswith("menu.") for p in catalog)
+    assert all(not p["key"].startswith("group.") for p in catalog)
+    assert rbac.PAGE_WATCHLIST in keys
+    assert rbac.PAGE_ANALYSIS not in keys
+
+
+def test_dynamic_analysis_and_runtime_page_auto_enter_catalog(data_dir):
+    analysis_dir = data_dir / "analysis_menus"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    (analysis_dir / "news_flow.json").write_text(
+        '{"id":"news_flow","label":"新闻流","order":1}', encoding="utf-8"
+    )
+    pack_dir = data_dir / "ext_pages" / "custom_page"
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "page.json").write_text(
+        '{"id":"custom_page","enabled":true,"label":"自定义页","path":"/custom-page","uploaded_at":10}',
+        encoding="utf-8",
+    )
+
+    menus = menu_registry.menu_nodes(data_dir)
+    keys = {m["key"] for m in menus}
+    assert "page.analysis.news_flow" in keys
+    assert rbac.extension_page_key("/custom-page") in keys
+    assert "page.analysis.news_flow" in {p["key"] for p in menu_registry.permission_catalog(data_dir)}
+
+    # 动态页面默认不授权
+    assert "page.analysis.news_flow" not in user_store.permissions_for_group(rbac.EDITOR)
+    assert rbac.extension_page_key("/custom-page") not in user_store.permissions_for_group(rbac.EDITOR)
+
+
+def test_source_page_manifest_auto_adds_new_page(data_dir, monkeypatch, tmp_path):
+    manifest = tmp_path / "navigation-manifest.json"
+    manifest.write_text(
+        '{"version":1,"pages":['
+        '{"path":"/financials","label":"财务概况","order":100},'
+        '{"path":"/future-page","label":"未来页面","order":120}'
+        ']}',
+        encoding="utf-8",
+    )
+    nodes = menu_registry.source_page_nodes(manifest)
+    keys = {node["key"] for node in nodes}
+    # 静态清单已有的官方扩展页不重复注册，新页面自动成为叶子权限。
+    assert rbac.PAGE_EXT_FINANCIALS not in keys
+    assert rbac.extension_page_key("/future-page") in keys
+    assert all(node["parent"] == rbac.MENU_EXTENSIONS for node in nodes)
+
+    monkeypatch.setenv("TSP_FRONTEND_DIST", str(tmp_path))
+    menus = menu_registry.menu_nodes(data_dir)
+    assert rbac.extension_page_key("/future-page") in {node["key"] for node in menus}
+    assert rbac.extension_page_key("/future-page") in {
+        node["key"] for node in menu_registry.permission_catalog(data_dir)
+    }
+
+
+def test_saved_layout_moves_page_and_group(data_dir):
+    menus = menu_registry.save_layout(data_dir, [
+        {"type": "page", "route": "/"},
+        {"type": "group", "key": "group:ai", "label": "AI 工作台", "children": [
+            {"type": "page", "route": "/assistant"},
+        ]},
+        {"type": "group", "key": rbac.MENU_TRADING, "label": "交易", "children": [
+            {"type": "page", "route": "/paper"},
+        ]},
+    ])
+    by_key = {node["key"]: node for node in menus}
+    assert by_key[rbac.PAGE_EXT_ASSISTANT]["parent"] == "menu.custom.ai"
+    assert by_key[rbac.PAGE_EXT_ASSISTANT]["order"] == 0
+    assert by_key["menu.custom.ai"]["label"] == "AI 工作台"
+    assert by_key[rbac.MENU_TRADING]["label"] == "交易"
+    assert by_key[rbac.PAGE_EXT_PAPER]["parent"] == rbac.MENU_TRADING
+
+    catalog = {node["key"]: node for node in menu_registry.permission_catalog(data_dir)}
+    assert catalog[rbac.PAGE_EXT_ASSISTANT]["parent"] == "menu.custom.ai"
+
+    # 再改成顶层页面：父级为空，权限目录同步跟随。
+    menus = menu_registry.save_layout(data_dir, [
+        {"type": "page", "route": "/"},
+        {"type": "page", "route": "/assistant"},
+    ])
+    by_key = {node["key"]: node for node in menus}
+    assert by_key[rbac.PAGE_EXT_ASSISTANT]["parent"] == ""
+
+
+def test_legacy_page_analysis_is_migrated_to_current_leaves(data_dir):
+    _super()
+    with user_store._connect() as conn:
+        conn.execute(
+            "UPDATE role_groups SET permissions = ? WHERE key = ?",
+            ('["page.watchlist", "page.analysis"]', rbac.EDITOR),
+        )
+    # 直接写库后再跑迁移，路径与线上启动一致
+    user_store.run_schema_migrations()
+    group = user_store.get_role_group(rbac.EDITOR)
+    assert group is not None
+    assert rbac.PAGE_ANALYSIS not in group["permissions"]
+    assert rbac.PAGE_WATCHLIST in group["permissions"]
+    dynamic_keys = set(menu_registry.dynamic_page_permission_keys(data_dir))
+    assert dynamic_keys
+    assert dynamic_keys <= set(group["permissions"])
+
+    # 幂等：再迁移一次不会重复/回退
+    user_store.run_schema_migrations()
+    assert set(user_store.get_role_group(rbac.EDITOR)["permissions"]) == set(group["permissions"])
+
+
+def test_update_group_accepts_dynamic_page_permission(data_dir):
+    super_user = _super()
+    with user_store._connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO role_groups (key, name, description, permissions, is_builtin, updated_at)"
+            " VALUES (?, ?, ?, ?, 1, ?)",
+            (rbac.EDITOR, "编辑者", "", '["page.watchlist","page.analysis.news_flow"]', 0),
+        )
+    group = user_store.get_role_group(rbac.EDITOR)
+    assert group is not None
+    assert "page.analysis.news_flow" in group["permissions"]
+    # 旧兼容码不再合法，保存时会被拒绝
+    with pytest.raises(ValueError):
+        user_store.update_role_group(rbac.EDITOR, permissions=[rbac.PAGE_ANALYSIS], actor=super_user)
+
+
+def test_navigation_tree_endpoint_returns_shared_menu(data_dir):
+    app = FastAPI()
+    app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=data_dir))
+    app.include_router(navigation_api.router)
+    res = TestClient(app, client=("127.0.0.1", 12345)).get("/api/navigation/tree")
+    assert res.status_code == 200
+    menus = res.json()["menus"]
+    assert len(menus) == len(menu_registry.menu_nodes(data_dir))
+    assert any(m["key"] == rbac.PAGE_WATCHLIST for m in menus)
+
+
+def _nav_client(user: dict | None, data_dir: Path) -> TestClient:
+    app = FastAPI()
+    app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=data_dir))
+    app.include_router(navigation_api.router)
+
+    @app.middleware("http")
+    async def inject_user(request: Request, call_next):
+        request.state.user = user
+        return await call_next(request)
+
+    return TestClient(app, client=("127.0.0.1", 12345))
+
+
+def test_navigation_layout_endpoint_persists_and_guards(data_dir):
+    super_user = _super()
+    client = _nav_client(super_user, data_dir)
+    res = client.put("/api/navigation/layout", json={"items": [
+        {"type": "page", "route": "/"},
+        {"type": "group", "key": "group:ai", "label": "AI 工作台", "children": [
+            {"type": "page", "route": "/assistant"},
+        ]},
+    ]})
+    assert res.status_code == 200
+    menus = {m["key"]: m for m in res.json()["menus"]}
+    assert menus[rbac.PAGE_EXT_ASSISTANT]["parent"] == "menu.custom.ai"
+
+    reader = _member(rbac.EDITOR, "reader@example.com")
+    denied = _nav_client(reader, data_dir).put(
+        "/api/navigation/layout", json={"items": [{"type": "page", "route": "/"}]}
+    )
+    assert denied.status_code == 403
+
+
+def test_permission_catalog_endpoint_returns_menus(data_dir):
+    super_user = _super()
+    res = _make_client(super_user).get("/api/admin/permission-catalog")
+    assert res.status_code == 200
+    body = res.json()
+    assert "menus" in body and len(body["menus"]) > 20
+    assert "permissions" in body
+    assert all(not p["key"].startswith("menu.") for p in body["permissions"])

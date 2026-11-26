@@ -19,6 +19,7 @@ import logging
 import os
 import threading
 import time
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -211,11 +212,22 @@ def force_release(
     _terminate_process(process)
     if not _wait_condition(
         lambda: (not _pid_alive(target_pid)) or (not probe_lock_held(data_dir)),
-        _TERMINATE_GRACE_SECONDS + _RELEASE_WAIT_SECONDS,
+        _TERMINATE_GRACE_SECONDS,
     ):
-        raise MiningLockAdminError(
-            f"持有者 pid={target_pid} 未能终止或锁未释放, 请手动处理"
+        # 持有者忽略 SIGTERM (自定义处理器/被阻塞的信号掩码) 时, "强制释放"必须
+        # 真的拿到锁, 否则端点永远返回 409。宽限期后升级到 SIGKILL。
+        logger.warning(
+            "强制释放: 持有者 pid=%s 未响应 SIGTERM, 升级为 SIGKILL", target_pid,
         )
+        with suppress(psutil.NoSuchProcess):
+            process.kill()
+        if not _wait_condition(
+            lambda: (not _pid_alive(target_pid)) or (not probe_lock_held(data_dir)),
+            _RELEASE_WAIT_SECONDS,
+        ):
+            raise MiningLockAdminError(
+                f"持有者 pid={target_pid} 未能终止或锁未释放, 请手动处理"
+            )
     try:
         lock.acquire()
     except MiningProcessLockError as exc:

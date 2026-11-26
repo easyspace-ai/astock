@@ -11,6 +11,25 @@ from typing import Any
 from . import announcements, config, models, news, store
 
 
+class SyncBusyError(RuntimeError):
+    """已有抓取在跑; 手动触发不排队, 由路由层转成 409 让前端提示稍后再试。"""
+
+
+# 每个 data_dir 一把抓取锁: 第三方源是部署级共享资源, 不能按请求并发。
+_SYNC_LOCKS: dict[str, threading.Lock] = {}
+_SYNC_LOCKS_GUARD = threading.Lock()
+
+
+def _sync_lock(data_dir: str | Path) -> threading.Lock:
+    key = str(Path(data_dir))
+    with _SYNC_LOCKS_GUARD:
+        lock = _SYNC_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _SYNC_LOCKS[key] = lock
+        return lock
+
+
 class InfoService:
     def __init__(self, data_dir: str | Path):
         self.data_dir = Path(data_dir)
@@ -208,7 +227,41 @@ class InfoService:
             "updated_at": store.now_text(),
         }
 
-    def sync(self, kinds: list[str] | None = None, legacy_root: str | None = None, force: bool = False, live: bool = False, date: str | None = None) -> dict[str, Any]:
+    def sync(
+        self,
+        kinds: list[str] | None = None,
+        legacy_root: str | None = None,
+        force: bool = False,
+        live: bool = False,
+        date: str | None = None,
+        *,
+        wait: bool = True,
+        actor: str = "",
+    ) -> dict[str, Any]:
+        """抓取/重建资讯数据。
+
+        抓取是「共享数据集的增量刷新」: 多账号共用同一个 info_hub 目录, 并发抓取
+        既会重复打第三方源(限流/封 IP), 也会重复 rebuild。这里用按 data_dir 的
+        全局单飞锁串行化: 定时任务 wait=True 排队不丢任务, 手动触发 wait=False
+        立即返回 SyncBusyError, 由路由层转成 409。
+        """
+        lock = _sync_lock(self.data_dir)
+        if not lock.acquire(blocking=wait):
+            raise SyncBusyError("资讯抓取正在进行中，请稍后再试")
+        try:
+            return self._sync_locked(kinds, legacy_root, force, live, date, actor)
+        finally:
+            lock.release()
+
+    def _sync_locked(
+        self,
+        kinds: list[str] | None,
+        legacy_root: str | None,
+        force: bool,
+        live: bool,
+        date: str | None,
+        actor: str,
+    ) -> dict[str, Any]:
         kinds = kinds or ["announcements", "news", "flash"]
         result: dict[str, Any] = {"kinds": kinds, "at": store.now_text()}
         legacy_root = legacy_root or ""
@@ -237,7 +290,13 @@ class InfoService:
         if "flash" in kinds:
             result["flash"] = news.rebuild(self.data_dir)
         self.invalidate()
-        store.record_run(self.data_dir, {"action": "sync", "kinds": kinds, "ok": True, "summary": {k: _compact(v) for k, v in result.items() if k != "at"}})
+        store.record_run(self.data_dir, {
+            "action": "sync",
+            "kinds": kinds,
+            "ok": True,
+            "actor": actor,
+            "summary": {k: _compact(v) for k, v in result.items() if k != "at"},
+        })
         return result
 
 

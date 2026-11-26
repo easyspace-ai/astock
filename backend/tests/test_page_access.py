@@ -70,9 +70,15 @@ def _user_with(pages: list[str], email: str) -> dict:
 
 def test_page_mapping_only_uses_known_permissions():
     catalog_keys = {p["key"] for p in rbac.catalog()}
+    wildcard_keys = {rbac.PAGE_ANALYSIS_WILDCARD, rbac.PAGE_EXT_WILDCARD}
     for pages in page_access.PAGE_ACCESS.values():
         assert pages
-        assert set(pages) <= catalog_keys
+        for key in pages:
+            assert (
+                key in catalog_keys
+                or key in wildcard_keys
+                or rbac.is_valid_permission(key)
+            ), key
 
 
 def test_factor_page_can_read_factors_but_not_screener_or_watchlist(data_dir):

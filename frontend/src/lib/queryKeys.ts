@@ -126,6 +126,7 @@ export const QK = {
   dimensionIntraday:    (id: string, field: string, value: string, date?: string) => ['dimension-intraday', id, field, value, date] as const,
   analysisMenus:        ['analysis-menus'] as const,
   analysisMenu:         (id: string) => ['analysis-menu', id] as const,
+  navigationTree:       ['navigation-tree'] as const,
   extPages:             ['ext-pages'] as const,
   extPagesSourceNamespaces: ['ext-pages', 'source-namespaces'] as const,
 

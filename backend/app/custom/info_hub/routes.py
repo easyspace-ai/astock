@@ -1,11 +1,16 @@
 """资讯中心只读 API + 手动同步入口。"""
 from __future__ import annotations
 
+import threading
+import time
+from datetime import date as date_cls
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.api.permissions import require_page_access
+from app.api.permissions import current_user, has_permission, require_page_access
+from app.market_time import cn_now
 from app.services import rbac
 
 from . import config, models, service, store
@@ -13,7 +18,12 @@ from . import config, models, service, store
 router = APIRouter(
     prefix="/api/info",
     tags=["info"],
-    dependencies=[Depends(require_page_access(rbac.PAGE_ANALYSIS))],
+    dependencies=[Depends(require_page_access(
+        rbac.PAGE_EXT_INFO_ANNOUNCEMENTS,
+        rbac.PAGE_EXT_INFO_NEWS,
+        rbac.PAGE_EXT_INFO_FLASH,
+        rbac.PAGE_ANALYSIS_WILDCARD,
+    ))],
 )
 
 
@@ -142,6 +152,62 @@ def timeline(
         raise HTTPException(400, str(exc)) from exc
 
 
+# 手动抓取频率: 同账号短时间连点无意义 (单次抓取本身要几十秒), 且会重复打第三方源。
+_MANUAL_COOLDOWN_S = 60.0
+_ADMIN_COOLDOWN_S = 30.0
+_NON_ADMIN_DATE_WINDOW_DAYS = 7
+_LAST_TRIGGER: dict[str, float] = {}
+_TRIGGER_LOCK = threading.Lock()
+
+
+def _actor(request: Request) -> str:
+    user = current_user(request)
+    if user is None:
+        return "token"
+    return str(user.get("email") or user.get("id") or "account")
+
+
+def _check_trigger_gap(actor: str, *, admin: bool) -> None:
+    """同一账号的重复点击直接 429; 抓取是部署级共享资源, 不做排队。"""
+    gap = _ADMIN_COOLDOWN_S if admin else _MANUAL_COOLDOWN_S
+    now = time.monotonic()
+    with _TRIGGER_LOCK:
+        last = _LAST_TRIGGER.get(actor)
+        if last is not None and now - last < gap:
+            wait = int(gap - (now - last)) + 1
+            raise HTTPException(
+                429,
+                f"抓取过于频繁，请 {wait} 秒后再试",
+                headers={"Retry-After": str(wait)},
+            )
+        _LAST_TRIGGER[actor] = now
+
+
+def _release_trigger(actor: str) -> None:
+    """抓取没真正跑起来(409 已被别的任务占用)时退回冷却占位, 用户可立即重试。"""
+    with _TRIGGER_LOCK:
+        _LAST_TRIGGER.pop(actor, None)
+
+
+def _check_manual_scope(date: str | None, *, admin: bool) -> None:
+    """普通用户只能触发近期增量; 历史回补/强制重抓属于共享数据集的维护操作。"""
+    if admin:
+        return
+    today = cn_now().date()
+    if not date:
+        return
+    try:
+        target = date_cls.fromisoformat(date)
+    except ValueError as exc:
+        raise HTTPException(400, "date 必须是 YYYY-MM-DD") from exc
+    earliest = today - timedelta(days=_NON_ADMIN_DATE_WINDOW_DAYS - 1)
+    if target > today or target < earliest:
+        raise HTTPException(
+            403,
+            f"仅可手动补抓近 {_NON_ADMIN_DATE_WINDOW_DAYS} 天（{earliest} 至 {today}）；更早日期请由管理员操作",
+        )
+
+
 @router.post("/sync")
 def sync(
     request: Request,
@@ -155,15 +221,30 @@ def sync(
     unknown = [k for k in selected if k not in {"announcements", "news", "flash"}]
     if unknown:
         raise HTTPException(400, f"未知模块: {unknown}")
-    if date:
-        from datetime import date as date_cls
-
+    admin = has_permission(request, rbac.ADMIN_DATA_MANAGE)
+    if not admin:
+        # 这两项是共享数据集的结构性维护, 与页面权限分开管。
+        if legacy_root:
+            raise HTTPException(403, "仅管理员可导入历史归档目录")
+        if force:
+            raise HTTPException(403, "仅管理员可强制重抓")
+        if date:
+            _check_manual_scope(date, admin=False)
+    elif date:
         try:
             date_cls.fromisoformat(date)
         except ValueError as exc:
             raise HTTPException(400, "date 必须是 YYYY-MM-DD") from exc
-    result = _svc(request).sync(selected, legacy_root, force, live, date=date)
-    return result
+
+    actor = _actor(request)
+    _check_trigger_gap(actor, admin=admin)
+    try:
+        return _svc(request).sync(
+            selected, legacy_root, force, live, date=date, wait=False, actor=actor,
+        )
+    except service.SyncBusyError as exc:
+        _release_trigger(actor)
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/reload")

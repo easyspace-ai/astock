@@ -201,7 +201,7 @@ function BatchDiscovery({
   })
   const watchlist = useQuery({
     queryKey: QK.watchlist,
-    queryFn: api.watchlistList,
+    queryFn: () => api.watchlistList(),
     staleTime: 30_000,
   })
   const watchlistEntries = watchlist.data?.symbols ?? []

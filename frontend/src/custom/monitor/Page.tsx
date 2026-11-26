@@ -724,12 +724,12 @@ function RulesList({ rulesQuery, onEdit }: {
   const hasGroupRules = rules.some(r => r.scope === 'watchlist_group')
   const groupsQ = useQuery({
     queryKey: QK.watchlistGroups,
-    queryFn: api.watchlistGroups,
+    queryFn: () => api.watchlistGroups(),
     enabled: hasGroupRules,
   })
   const watchlistQ = useQuery({
     queryKey: QK.watchlist,
-    queryFn: api.watchlistList,
+    queryFn: () => api.watchlistList(),
     enabled: hasGroupRules,
   })
   const groupMeta = useMemo(() => {

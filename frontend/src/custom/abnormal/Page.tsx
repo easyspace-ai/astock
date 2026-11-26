@@ -648,7 +648,7 @@ function DeviationView({ onPreview }: {
   // 自选过滤在关闭 (查看上次结果) 时也可用: 自选列表是轻量接口, 不涉及全市场计算
   const watchlist = useQuery({
     queryKey: QK.watchlist,
-    queryFn: api.watchlistList,
+    queryFn: () => api.watchlistList(),
     enabled: watchlistOnly,
     staleTime: 30_000,
   })

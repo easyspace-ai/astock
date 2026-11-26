@@ -50,17 +50,17 @@ def _route_fuyao(monkeypatch, provider):
     monkeypatch.setattr(custom, "get_provider", lambda name: provider)
 
 
-def test_sync_promotes_staged_files_without_reading_them_back(monkeypatch, repo):
+def test_sync_compacts_staged_files_into_partition(monkeypatch, repo):
+    """首建分区把 staging 压成一个 part.parquet: 不留下上百个 8KB 小文件。
+
+    内存边界由「按 chunk 流式落盘」保证: provider 不收集整段 DataFrame,
+    单次读回只覆盖一个日分区。
+    """
     provider = _StreamingProvider([
         _daily("000001.SZ", date(2020, 1, 2)),
         _daily("000002.SZ", date(2020, 1, 2)),
     ])
     _route_fuyao(monkeypatch, provider)
-    monkeypatch.setattr(
-        kline_sync.pl,
-        "scan_parquet",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("不应读回临时文件")),
-    )
 
     written = kline_sync.sync_and_persist_daily_batch(
         ["000001.SZ", "000002.SZ"], repo, object(),
@@ -68,10 +68,12 @@ def test_sync_promotes_staged_files_without_reading_them_back(monkeypatch, repo)
     )
 
     assert written == 2
+    assert provider.get_daily_called is False
     parts = sorted((repo.store.data_dir / "kline_daily" / "date=2020-01-02").glob("*.parquet"))
-    assert len(parts) == 2
-    stored = pl.concat([pl.read_parquet(part) for part in parts])
+    assert len(parts) == 1
+    stored = pl.read_parquet(parts[0])
     assert set(stored["symbol"].to_list()) == {"000001.SZ", "000002.SZ"}
+    assert not (repo.store.data_dir / ".daily_sync_staging").exists()
 
 
 def test_sync_persists_streamed_fuyao_chunks_only_after_fetch(monkeypatch, repo):

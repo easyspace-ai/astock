@@ -242,6 +242,30 @@ def test_force_release_kills_external_holder_and_takes_over(tmp_path):
         _kill(proc)
 
 
+def test_force_release_escalates_to_sigkill_when_sigterm_ignored(tmp_path, monkeypatch):
+    """持有者屏蔽/忽略 SIGTERM 时, 强制释放必须升级到 SIGKILL 才能真的拿到锁。
+
+    "强制释放"若只发 SIGTERM, 遇到自定义信号处理器 (或继承 SIG_IGN 的子进程)
+    会永远 409, 用户只能手动 kill。
+    """
+    proc = _spawn_holder(tmp_path)
+    lock = MiningProcessLock(tmp_path)
+    try:
+        monkeypatch.setattr(
+            "app.services.mining_lock_admin._terminate_process", lambda _p: None,
+        )
+        monkeypatch.setattr("app.services.mining_lock_admin._TERMINATE_GRACE_SECONDS", 0.2)
+        report = force_release(tmp_path, lock)
+        assert report["released"] is True
+        assert report["terminated_pid"] == proc.holder_process.pid
+        assert lock.acquired is True
+        proc.wait(timeout=10)
+    finally:
+        if lock.acquired:
+            lock.release()
+        _kill(proc)
+
+
 def test_force_release_refuses_fresh_store(tmp_path):
     proc = _spawn_holder(tmp_path)
     try:

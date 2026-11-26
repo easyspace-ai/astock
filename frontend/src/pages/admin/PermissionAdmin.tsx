@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, History, RefreshCw, Search, ShieldCheck, Users } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
@@ -19,7 +19,7 @@ const GROUP_TITLE: Record<string, string> = {
 }
 
 const GROUP_HINT: Record<string, string> = {
-  page: '没有勾选的页面不会出现在侧栏菜单，直接访问对应路由会显示「无权限」。',
+  page: '按前端一级/二级菜单分组；勾父级会批量勾选其下所有页面，真正保存的是叶子页面权限。',
   feature: '写操作与高成本操作的开关（策略编辑、回测运行、AI、导出）。',
   admin: '管理后台分区与接口的硬边界，后端会强制校验。',
 }
@@ -127,7 +127,7 @@ export function PermissionAdmin({
                 <RoleGroupCard
                   key={group.key}
                   group={group}
-                  permissions={catalog.data!.permissions}
+                  nodes={catalog.data!.menus ?? catalog.data!.permissions}
                   canEdit={canRoles}
                 />
               ) : null
@@ -268,13 +268,36 @@ function UsersPanel({ meId }: { meId?: number }) {
 
 // ---------------- 权限组矩阵 ----------------
 
+function TreeCheckbox({
+  checked,
+  indeterminate,
+  disabled,
+  onChange,
+}: {
+  checked: boolean
+  indeterminate?: boolean
+  disabled?: boolean
+  onChange?: () => void
+}) {
+  return (
+    <input
+      type="checkbox"
+      checked={checked}
+      disabled={disabled}
+      onChange={onChange}
+      ref={el => { if (el) el.indeterminate = !!indeterminate && !checked }}
+      className="h-3 w-3 shrink-0 accent-[hsl(var(--accent-solid))]"
+    />
+  )
+}
+
 function RoleGroupCard({
   group,
-  permissions,
+  nodes,
   canEdit,
 }: {
   group: RoleGroup
-  permissions: PermissionItem[]
+  nodes: PermissionItem[]
   canEdit: boolean
 }) {
   const qc = useQueryClient()
@@ -297,25 +320,106 @@ function RoleGroupCard({
     onError: (err) => toast(err instanceof Error ? err.message : '保存失败', 'error'),
   })
 
-  const toggle = (key: string) => {
+  const forcedKeys = useMemo(
+    () => group.key === 'super_admin' ? new Set(SUPER_ADMIN_FORCED) : new Set<string>(),
+    [group.key],
+  )
+  const isForced = (key: string) => forcedKeys.has(key)
+  const isChecked = (key: string) => draft.has(key) || isForced(key)
+
+  const childrenByParent = useMemo(() => {
+    const map = new Map<string, PermissionItem[]>()
+    for (const node of nodes) {
+      const parent = node.parent || ''
+      const list = map.get(parent) ?? []
+      list.push(node)
+      map.set(parent, list)
+    }
+    return map
+  }, [nodes])
+
+  const nodeKeys = useMemo(() => new Set(nodes.map(node => node.key)), [nodes])
+  const rootsByGroup = useMemo(() => {
+    const map = new Map<string, PermissionItem[]>()
+    for (const node of nodes) {
+      // 父节点缺失时也作为根节点展示，避免动态菜单删除后整棵子树消失。
+      const isRoot = !node.parent || !nodeKeys.has(node.parent)
+      if (!isRoot) continue
+      const list = map.get(node.group) ?? []
+      list.push(node)
+      map.set(node.group, list)
+    }
+    return map
+  }, [nodes, nodeKeys])
+
+  const leafKeys = (node: PermissionItem): string[] => {
+    if (node.kind !== 'group') return [node.key]
+    return (childrenByParent.get(node.key) ?? []).flatMap(leafKeys)
+  }
+
+  const toggleNode = (node: PermissionItem) => {
+    const leaves = leafKeys(node)
+    if (leaves.length === 0) return
+    const allChecked = leaves.every(isChecked)
     setDraft(prev => {
       const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
+      for (const key of leaves) {
+        if (isForced(key)) continue
+        if (allChecked) next.delete(key)
+        else next.add(key)
+      }
       return next
     })
     setDirty(true)
   }
 
-  const byGroup = useMemo(() => {
-    const map = new Map<string, PermissionItem[]>()
-    for (const p of permissions) {
-      const list = map.get(p.group) ?? []
-      list.push(p)
-      map.set(p.group, list)
-    }
-    return map
-  }, [permissions])
+  const renderNode = (node: PermissionItem, depth = 0): ReactNode => {
+    const leaves = leafKeys(node)
+    if (node.kind === 'group' && leaves.length === 0) return null
+    const checked = node.kind === 'group'
+      ? leaves.every(isChecked)
+      : isChecked(node.key)
+    const indeterminate = node.kind === 'group'
+      && leaves.some(isChecked) && !checked
+    const disabled = !canEdit
+      || (node.kind === 'permission' && isForced(node.key))
+      || (node.kind === 'group' && leaves.length > 0 && leaves.every(isForced))
+    const hasChildren = node.kind === 'group' && (childrenByParent.get(node.key) ?? []).length > 0
+    return (
+      <div key={node.key}>
+        <label
+          title={node.description}
+          className={cn(
+            'flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-[11px] hover:bg-elevated/60',
+            !canEdit && 'cursor-not-allowed opacity-70',
+            node.kind === 'group' && 'font-medium text-foreground/90',
+          )}
+          style={{ paddingLeft: `${6 + depth * 14}px` }}
+        >
+          <TreeCheckbox
+            checked={checked}
+            indeterminate={indeterminate}
+            disabled={disabled}
+            onChange={() => toggleNode(node)}
+          />
+          <span className={cn('min-w-0 flex-1 truncate', checked || indeterminate ? 'text-foreground' : 'text-secondary')}>
+            {node.label}
+          </span>
+          {node.kind === 'group' && (
+            <span className="shrink-0 text-[9px] tabular-nums text-muted">{leaves.filter(isChecked).length}/{leaves.length}</span>
+          )}
+          {node.kind === 'permission' && isForced(node.key) && (
+            <span className="shrink-0 text-[9px] text-muted">必选</span>
+          )}
+        </label>
+        {hasChildren && (
+          <div>
+            {(childrenByParent.get(node.key) ?? []).map(child => renderNode(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <section className="flex min-h-0 flex-col rounded-card border border-border bg-elevated/30">
@@ -333,7 +437,7 @@ function RoleGroupCard({
 
       <div className="flex-1 space-y-3 overflow-auto p-3">
         {['page', 'feature', 'admin'].map(gkey => {
-          const items = byGroup.get(gkey) ?? []
+          const items = rootsByGroup.get(gkey) ?? []
           if (items.length === 0) return null
           return (
             <div key={gkey}>
@@ -342,31 +446,7 @@ function RoleGroupCard({
                 <div className="mb-1 text-[10px] leading-4 text-muted">{GROUP_HINT[gkey]}</div>
               )}
               <div className="space-y-0.5">
-                {items.map(p => {
-                  const forced = group.key === 'super_admin'
-                    && SUPER_ADMIN_FORCED.includes(p.key)
-                  return (
-                    <label
-                      key={p.key}
-                      title={p.description}
-                      className={cn(
-                        'flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-[11px] hover:bg-elevated/60',
-                        !canEdit && 'cursor-not-allowed opacity-70',
-                      )}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={draft.has(p.key) || forced}
-                        disabled={!canEdit || forced}
-                        onChange={() => toggle(p.key)}
-                        className="h-3 w-3 accent-[hsl(var(--accent-solid))]"
-                      />
-                      <span className={cn('min-w-0 flex-1 truncate', draft.has(p.key) ? 'text-foreground' : 'text-secondary')}>
-                        {p.label}
-                      </span>
-                    </label>
-                  )
-                })}
+                {items.map(node => renderNode(node))}
               </div>
             </div>
           )

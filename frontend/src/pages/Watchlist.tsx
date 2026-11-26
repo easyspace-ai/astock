@@ -852,13 +852,13 @@ export function Watchlist() {
 
   const list = useQuery({
     queryKey: QK.watchlist,
-    queryFn: api.watchlistList,
+    queryFn: () => api.watchlistList(),
     staleTime: 30_000,  // 清单慢变 (增删后 mutation 会失效), 减少切页重拉
   })
 
   const groupList = useQuery({
     queryKey: QK.watchlistGroups,
-    queryFn: api.watchlistGroups,
+    queryFn: () => api.watchlistGroups(),
   })
   const groups = groupList.data?.groups ?? []
   const activeGroupId = selectedGroup === 'all' || selectedGroup === 'ungrouped'

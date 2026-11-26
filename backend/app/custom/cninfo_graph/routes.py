@@ -26,7 +26,7 @@ def build_router() -> APIRouter:
     router = APIRouter(
         prefix="/api/graph",
         tags=["company-graph"],
-        dependencies=[Depends(require_page_access(rbac.PAGE_ANALYSIS))],
+        dependencies=[Depends(require_page_access(rbac.PAGE_EXT_COMPANY_GRAPH))],
     )
 
     def _data_dir(request: Request):

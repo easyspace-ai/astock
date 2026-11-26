@@ -45,9 +45,25 @@ def _request_permissions(request: Request) -> frozenset[str]:
     return cached
 
 
+def _permission_matches(perms: frozenset[str], key: str) -> bool:
+    """精确匹配或末段通配：`page.ext.*` 可匹配任意扩展页叶子权限。"""
+    if key in perms:
+        return True
+    if key.endswith(".*"):
+        prefix = key[:-1]
+        return any(p.startswith(prefix) for p in perms)
+    return False
+
+
 def has_permission(request: Request, key: str) -> bool:
     """当前请求是否拥有权限码。无账号会话(API Token/内部调用)按全权限处理。"""
-    return key in _request_permissions(request)
+    user = current_user(request)
+    if user is None:
+        return True
+    # 超级管理员始终拥有全部权限；动态新增页面不需要每次迁移权限组。
+    if user_store.effective_perm_role(user) == rbac.SUPER_ADMIN:
+        return True
+    return _permission_matches(_request_permissions(request), key)
 
 
 def is_admin(request: Request) -> bool:
@@ -110,8 +126,12 @@ def guard_ext_pages_access(request: Request) -> None:
         return
     if (
         request.method == "GET"
-        and request.url.path.endswith("/bundle.js")
-        and has_permission(request, rbac.PAGE_ANALYSIS)
+        and (
+            request.url.path in ("/api/ext-pages", "/api/ext-pages/")
+            or request.url.path.endswith("/bundle.js")
+        )
+        and (has_permission(request, rbac.PAGE_EXT_WILDCARD)
+             or has_permission(request, rbac.PAGE_ANALYSIS_WILDCARD))
     ):
         return
     raise HTTPException(status_code=403, detail="仅管理员可管理页面插件")

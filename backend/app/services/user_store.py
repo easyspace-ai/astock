@@ -200,6 +200,40 @@ def _migrate_schema() -> None:
             (rbac.DEFAULT_PERM_ROLE,),
         )
 
+        _migrate_legacy_analysis_permissions(conn)
+
+
+def _migrate_legacy_analysis_permissions(conn: sqlite3.Connection) -> None:
+    """把旧 `page.analysis`（分析中心/扩展页一把梭）展开成当前具体页面权限。
+
+    只在旧码仍存在时执行；迁移后新增的分析菜单/扩展页默认不授权，由管理员显式勾选。
+    """
+    from app.config import settings
+    from app.services import menu_registry
+
+    target = menu_registry.dynamic_page_permission_keys(settings.data_dir)
+    if not target:
+        return
+    changed = 0
+    for row in conn.execute("SELECT key, permissions FROM role_groups").fetchall():
+        try:
+            perms = json.loads(row["permissions"] or "[]")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(perms, list) or rbac.PAGE_ANALYSIS not in perms:
+            continue
+        expanded = [p for p in perms if p != rbac.PAGE_ANALYSIS]
+        for key in target:
+            if key not in expanded:
+                expanded.append(key)
+        conn.execute(
+            "UPDATE role_groups SET permissions = ? WHERE key = ?",
+            (json.dumps(expanded, ensure_ascii=False), row["key"]),
+        )
+        changed += 1
+    if changed:
+        logger.info("已迁移旧 page.analysis 权限组: %s 个", changed)
+
 
 # ================================================================
 # 密码工具
@@ -398,7 +432,7 @@ def _row_to_group(row: sqlite3.Row | None) -> dict[str, Any] | None:
         # 脏数据不静默当全权限: 记日志并按空集处理 (fail-closed)
         logger.warning("role_groups.permissions 非法 JSON (key=%s)", d.get("key"))
         perms = []
-    d["permissions"] = [p for p in perms if p in rbac.PERMISSION_KEYS] if isinstance(perms, list) else []
+    d["permissions"] = [p for p in perms if isinstance(p, str) and rbac.is_valid_permission(p)] if isinstance(perms, list) else []
     d["is_builtin"] = bool(d.get("is_builtin"))
     return d
 

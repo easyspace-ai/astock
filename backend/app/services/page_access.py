@@ -26,7 +26,8 @@ MARKET_PAGES: tuple[str, ...] = (
     rbac.PAGE_BACKTEST,
     rbac.PAGE_REGIME,
     rbac.PAGE_INDICES,
-    rbac.PAGE_ANALYSIS,
+    rbac.PAGE_ANALYSIS_WILDCARD,
+    rbac.PAGE_EXT_WILDCARD,
     rbac.PAGE_DEV,
     rbac.ADMIN_DATA_MANAGE,
 )
@@ -66,17 +67,24 @@ PAGE_ACCESS: dict[str, tuple[str, ...]] = {
     "indices": (
         rbac.PAGE_INDICES,
         rbac.PAGE_DASHBOARD,
-        rbac.PAGE_ANALYSIS,
+        rbac.PAGE_ANALYSIS_WILDCARD,
+        rbac.PAGE_EXT_WILDCARD,
         rbac.ADMIN_DATA_MANAGE,
     ),
     "stock_analysis": (rbac.PAGE_STOCK_ANALYSIS,),
     "stock_growth": (rbac.PAGE_GROWTH,),
-    "financials": (rbac.PAGE_STOCK_ANALYSIS, rbac.PAGE_GROWTH, rbac.PAGE_ANALYSIS),
-    "rps": (rbac.PAGE_FACTORS, rbac.PAGE_SCREENER, rbac.PAGE_ANALYSIS),
-    "sector_rotation": (rbac.PAGE_DASHBOARD, rbac.PAGE_ANALYSIS, rbac.PAGE_REGIME),
+    "financials": (
+        rbac.PAGE_STOCK_ANALYSIS,
+        rbac.PAGE_GROWTH,
+        rbac.PAGE_EXT_FINANCIALS,
+        rbac.PAGE_ANALYSIS_WILDCARD,
+    ),
+    "rps": (rbac.PAGE_FACTORS, rbac.PAGE_SCREENER, rbac.PAGE_ANALYSIS_WILDCARD),
+    "sector_rotation": (rbac.PAGE_DASHBOARD, rbac.PAGE_ANALYSIS_WILDCARD, rbac.PAGE_REGIME),
     "abnormal": (
         rbac.PAGE_DASHBOARD,
-        rbac.PAGE_ANALYSIS,
+        rbac.PAGE_ANALYSIS_WILDCARD,
+        rbac.PAGE_EXT_ABNORMAL,
         rbac.PAGE_WATCHLIST,
         rbac.PAGE_SCREENER,
         rbac.PAGE_STOCK_ANALYSIS,
@@ -84,7 +92,8 @@ PAGE_ACCESS: dict[str, tuple[str, ...]] = {
     ),
     # 扩展数据列被自选/策略/分析页读取; 配置写入仍由 guard_ext_data_access 管
     "ext_data": (
-        rbac.PAGE_ANALYSIS,
+        rbac.PAGE_ANALYSIS_WILDCARD,
+        rbac.PAGE_EXT_WILDCARD,
         rbac.PAGE_WATCHLIST,
         rbac.PAGE_SCREENER,
         rbac.ADMIN_DATA_MANAGE,
@@ -98,7 +107,7 @@ PAGE_ACCESS: dict[str, tuple[str, ...]] = {
     ),
     "pipeline": MARKET_PAGES,
     # 扩展页（/analysis 下）自带的数据/模拟盘/事件中心
-    "paper": (rbac.PAGE_ANALYSIS,),
-    "lots": (rbac.PAGE_ANALYSIS,),
-    "market_recap": (rbac.PAGE_DASHBOARD, rbac.PAGE_ANALYSIS),
+    "paper": (rbac.PAGE_EXT_PAPER, rbac.PAGE_ANALYSIS_WILDCARD),
+    "lots": (rbac.PAGE_EXT_LOTS, rbac.PAGE_ANALYSIS_WILDCARD),
+    "market_recap": (rbac.PAGE_DASHBOARD, rbac.PAGE_EXT_REVIEW, rbac.PAGE_ANALYSIS_WILDCARD),
 }

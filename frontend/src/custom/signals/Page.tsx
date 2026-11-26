@@ -39,7 +39,7 @@ export function Signals() {
 
 function SignalsBody({ highlight }: { highlight: string }) {
   const qc = useQueryClient()
-  const list = useQuery({ queryKey: QK.customSignals, queryFn: api.customSignalsList, staleTime: 60_000 })
+  const list = useQuery({ queryKey: QK.customSignals, queryFn: () => api.customSignalsList(), staleTime: 60_000 })
   const options = useQuery({ queryKey: QK.customSignalsOptions, queryFn: api.customSignalsOptions, staleTime: 60_000 })
 
   const [showForm, setShowForm] = useState(false)

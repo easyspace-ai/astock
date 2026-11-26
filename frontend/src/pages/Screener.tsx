@@ -819,7 +819,7 @@ export function Screener() {
   // 自选列表 (用于判断是否在自选中)
   const watchlist = useQuery({
     queryKey: QK.watchlist,
-    queryFn: api.watchlistList,
+    queryFn: () => api.watchlistList(),
     staleTime: 30_000,
   })
   const watchlistSet = useMemo(() => {

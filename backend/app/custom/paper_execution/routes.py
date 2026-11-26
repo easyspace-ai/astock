@@ -111,7 +111,7 @@ def build_router() -> APIRouter:
         prefix="/api/custom/paper-execution",
         tags=["custom-paper-execution"],
         lifespan=lifespan,
-        dependencies=[Depends(require_page_access(rbac.PAGE_ANALYSIS))],
+        dependencies=[Depends(require_page_access(rbac.PAGE_EXT_PAPER, rbac.PAGE_ANALYSIS_WILDCARD))],
     )
 
     def require_service() -> ExecutionService:

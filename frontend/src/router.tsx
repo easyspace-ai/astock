@@ -1,10 +1,10 @@
 import { lazy, Suspense } from 'react'
-import { createBrowserRouter, Navigate, useLocation, useSearchParams } from 'react-router-dom'
+import { createBrowserRouter, Navigate, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { NoPermission } from './components/NoPermission'
 import { useSettings } from './lib/useSharedQueries'
 import { useSession, usePermissions } from './lib/useAccount'
-import { PERM, permissionForRoute } from './lib/permissions'
+import { PERM, analysisPagePermission, extensionPagePermission, permissionForRoute } from './lib/permissions'
 import { Logo } from './components/Logo'
 import { ExtensionBoundary } from './extensions/ExtensionBoundary'
 import {
@@ -162,6 +162,12 @@ function PermissionGate({
   return <>{children}</>
 }
 
+/** 分析详情按具体菜单 ID 鉴权：/analysis/<id> -> page.analysis.<id> */
+function AnalysisMenuGate({ children }: { children: React.ReactNode }) {
+  const { menuId } = useParams()
+  return <PermissionGate perm={menuId ? analysisPagePermission(menuId) : PERM.analysis}>{children}</PermissionGate>
+}
+
 // /onboarding 访问守卫: 必须已登录且为管理员
 function OnboardingRouteGuard() {
   const session = useSession()
@@ -281,7 +287,7 @@ export const router = createBrowserRouter([
           </PermissionGate>
         ),
       },
-      { path: 'analysis/:menuId', element: <PermissionGate perm={PERM.analysis}><AnalysisDetail /></PermissionGate> },
+      { path: 'analysis/:menuId', element: <AnalysisMenuGate><AnalysisDetail /></AnalysisMenuGate> },
       { path: 'watchlist', element: <PermissionGate perm={PERM.watchlist}><Watchlist /></PermissionGate> },
       { path: 'screener', element: <PermissionGate perm={PERM.screener}><Screener /></PermissionGate> },
       { path: 'backtest', element: <PermissionGate perm={PERM.backtest}><Backtest /></PermissionGate> },
@@ -303,7 +309,7 @@ export const router = createBrowserRouter([
         return {
           path: route.path.slice(1),
           element: (
-            <PermissionGate perm={permissionForRoute(route.path) ?? PERM.analysis}>
+            <PermissionGate perm={permissionForRoute(route.path) ?? extensionPagePermission(route.path)}>
               <ExtensionBoundary extensionId={route.extensionId}>
                 <ExtensionPage />
               </ExtensionBoundary>

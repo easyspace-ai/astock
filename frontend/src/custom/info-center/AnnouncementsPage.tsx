@@ -157,14 +157,25 @@ export function AnnouncementsPage() {
 
     // 公告抓取可能持续几十秒；请求先发出，页面通过健康状态里的运行日志判断完成，
     // 避免 HTTP 请求本身超时后，后台其实已经抓完却给用户报错。
-    // 手动触发请求只负责“发出”；完成状态以运行日志为准，避免客户端 HTTP
-    // 先超时、但服务端其实已经抓完的假失败。
-    void infoApi.sync('announcements', true, date || undefined).catch(() => undefined)
+    // 但 403/409/429 是**直接拒绝**, 不会产生运行日志: 必须短路提示, 否则用户要等
+    // 满 5 分钟才看到"抓取超时"。
+    const rejected: { message: string | null } = { message: null }
+    void infoApi.sync('announcements', true, date || undefined).catch((error: unknown) => {
+      rejected.message = error instanceof Error ? error.message : '抓取请求失败'
+    })
 
     const deadline = Date.now() + 300_000
     try {
       while (Date.now() < deadline) {
+        if (rejected.message) {
+          setSyncMessage(rejected.message)
+          return
+        }
         await new Promise(resolve => window.setTimeout(resolve, 2_000))
+        if (rejected.message) {
+          setSyncMessage(rejected.message)
+          return
+        }
         const health = (await infoApi.health()) as {
           runs?: Array<{ at: string; action: string; date?: string; cninfo?: number; em?: number; errors?: string[]; degraded?: boolean }>
         }

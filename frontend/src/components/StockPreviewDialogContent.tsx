@@ -128,7 +128,7 @@ export function StockPreviewDialogContent({ symbol, name, onClose, triggerInfo, 
 
   const watchlist = useQuery({
     queryKey: QK.watchlist,
-    queryFn: api.watchlistList,
+    queryFn: () => api.watchlistList(),
     enabled: !!symbol,
   })
   const monitorRules = useQuery({

@@ -58,6 +58,7 @@ from app.api import (
 )
 from app.api import accounts as accounts_api
 from app.api import admin_users as admin_users_api
+from app.api import navigation as navigation_api
 from app.api import system as system_api
 from app.api import permissions as permissions_api
 from app.api import settings as settings_api
@@ -854,6 +855,7 @@ def _page_deps(name: str) -> list:
 app.include_router(core_router)
 app.include_router(accounts_api.router)
 app.include_router(admin_users_api.router)
+app.include_router(navigation_api.router)
 app.include_router(system_api.router)
 app.include_router(kline.router, dependencies=_page_deps("kline"))
 app.include_router(watchlist.router, dependencies=_page_deps("watchlist"))

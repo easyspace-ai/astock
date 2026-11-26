@@ -134,12 +134,12 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const watchMenuRef = useRef<HTMLDivElement>(null)
   const watchlistQ = useQuery({
     queryKey: QK.watchlist,
-    queryFn: api.watchlistList,
+    queryFn: () => api.watchlistList(),
     enabled: watchMenuOpen || isGroupScope,
   })
   const watchGroupsQ = useQuery({
     queryKey: QK.watchlistGroups,
-    queryFn: api.watchlistGroups,
+    queryFn: () => api.watchlistGroups(),
     enabled: watchMenuOpen || isGroupScope,
   })
   // 分组选择下拉 (scope=watchlist_group)

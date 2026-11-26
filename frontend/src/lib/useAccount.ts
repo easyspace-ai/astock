@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { api, type AccountUser } from './api'
-import { PERM } from './permissions'
+import { PERM, permissionMatches } from './permissions'
 
 /**
  * 当前邮箱账号用户（系统唯一认证体系）。
@@ -30,7 +30,8 @@ export function useAccountUser() {
  */
 export function userHasPermission(user: AccountUser | null | undefined, key: string): boolean {
   if (!user) return false
-  if (Array.isArray(user.permissions)) return user.permissions.includes(key)
+  if (user.perm_role === 'super_admin') return true
+  if (Array.isArray(user.permissions)) return permissionMatches(user.permissions, key)
   return user.role === 'admin'
 }
 
@@ -44,7 +45,8 @@ export function usePermissions() {
   const codes = user?.permissions
   const can = (key: string) => {
     if (me.isPending || !user) return false
-    if (Array.isArray(codes)) return codes.includes(key)
+    if (user.perm_role === 'super_admin') return true
+    if (Array.isArray(codes)) return permissionMatches(codes, key)
     return user.role === 'admin'
   }
   return {

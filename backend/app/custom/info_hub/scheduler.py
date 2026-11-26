@@ -31,7 +31,7 @@ def start(data_dir: str | Path) -> BackgroundScheduler | None:
 
         def run(kinds: list[str], label: str) -> None:
             try:
-                result = svc.sync(kinds, live=True)
+                result = svc.sync(kinds, live=True, actor="scheduler")
                 store.record_run(data_dir, {"action": label, "ok": True, "summary": _brief(result)})
             except Exception as exc:
                 logger.exception("info_hub %s failed", label)

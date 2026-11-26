@@ -38,6 +38,41 @@ window.addEventListener('unhandledrejection', (event) => {
   console.error('[TSP] unhandled rejection', event.reason)
 })
 
+// 发布新版本会删掉旧的分块文件。已打开的标签页再懒加载页面时, 浏览器仍按旧
+// chunk 名请求, 得到 404 后抛出 "Failed to fetch dynamically imported module"。
+// Vite 在动态 import 失败时会派发 vite:preloadError: 这里自动重载一次, 拿到服务
+// 端 no-store 的新 index.html。sessionStorage 标记防死循环, 启动 10s 后清标记,
+// 让下一次发布仍能自动恢复。
+const PRELOAD_RELOAD_KEY = 'tsp:preload-reloaded'
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault()
+  let alreadyReloaded = false
+  try {
+    alreadyReloaded = sessionStorage.getItem(PRELOAD_RELOAD_KEY) === '1'
+  } catch {
+    // 隐私模式可能禁用 sessionStorage: 退化为不自动重载, 让错误正常上报
+    alreadyReloaded = true
+  }
+  if (alreadyReloaded) {
+    console.error('[TSP] 资源分块加载失败, 本次会话已重载过', event)
+    return
+  }
+  try {
+    sessionStorage.setItem(PRELOAD_RELOAD_KEY, '1')
+  } catch {
+    // 同上, 不阻断重载
+  }
+  console.warn('[TSP] 检测到资源版本已更新, 重新加载页面')
+  window.location.reload()
+})
+window.setTimeout(() => {
+  try {
+    sessionStorage.removeItem(PRELOAD_RELOAD_KEY)
+  } catch {
+    // 忽略
+  }
+}, 10_000)
+
 // 全局认证拦截: 任何 query/mutation 收到 401 (未登录/会话过期) → 跳登录页。
 // api.ts 的 request() 已对 401 静默 (不弹 toast), 这里统一负责跳转。
 // 排除 /login 自身的请求, 避免登录页请求失败又跳登录形成死循环。

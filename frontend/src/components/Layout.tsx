@@ -27,7 +27,7 @@ import { useStrategyLibrarySync } from '@/lib/strategyLibrary'
 import { setKlineBatchLimits } from '@/lib/klineBatchLimits'
 import { seedHiddenForNewUser } from '@/lib/navOrder'
 import { navPageIds, resolveNavLayout, visibleNavLayout, type NavGroup, type NavNode } from '@/lib/navLayout'
-import { getNavigationEntries } from '@/lib/navigation'
+import { getNavigationEntries, menuNodesToLayout } from '@/lib/navigation'
 import { TopBar } from './shell/TopBar'
 import { ContentPanel } from './shell/ContentPanel'
 import { StatusBar } from './shell/StatusBar'
@@ -96,27 +96,40 @@ export function Layout() {
     queryKey: QK.analysisMenus,
     queryFn: api.analysisMenus,
   })
+  const { data: navigationTree } = useQuery({
+    queryKey: QK.navigationTree,
+    queryFn: api.navigationTree,
+    staleTime: 60_000,
+  })
 
-  // 自选分组 — 仅当用户开启「显示在侧边栏」时拉取
+  // 自选分组 — 仅当用户开启「显示在侧边栏」时拉取；无自选页权限时不发请求,
+  // 否则全局偏好(全站共享)一开, 每个受限账号都会 403。
   const groupsInNav = prefs?.watchlist_groups_in_nav ?? false
+  const canReadWatchlist = !account.isLoading && userHasPermission(account.data, PERM.watchlist)
   const location = useLocation()
   const { data: watchlistGroupsData } = useQuery({
     queryKey: QK.watchlistGroups,
-    queryFn: api.watchlistGroups,
-    enabled: groupsInNav,
+    queryFn: () => api.watchlistGroups({ quiet: true }),
+    enabled: groupsInNav && canReadWatchlist,
+    retry: false,
     staleTime: 60_000,
   })
   const watchlistGroups = watchlistGroupsData?.groups ?? []
   // 自选二级菜单展开状态 — 默认当前在自选页时展开
   const [watchlistNavExpanded, setWatchlistNavExpanded] = useState(location.pathname === '/watchlist')
 
-  const allNav = getNavigationEntries(analysisMenus?.items ?? [])
+  const allNav = getNavigationEntries(analysisMenus?.items ?? [], navigationTree?.menus ?? [])
   // 页面级权限：无权限的页面不进导航（必须在套用 nav_layout 用户偏好之前过滤，
   // 否则旧布局里的页面 id 会绕过权限重新出现）。
   const canPage = (perm: string) => !account.isLoading && userHasPermission(account.data, perm)
   const permittedNav = allNav.filter(item => !item.perm || canPage(item.perm))
   const navById = new Map(allNav.map(item => [item.id, item]))
-  const layout = resolveNavLayout(prefs?.nav_layout, permittedNav, prefs?.nav_order)
+  // 后端菜单树是分组/标签/顺序的唯一来源；个人保存的旧 nav_layout 不再覆盖侧栏，
+  // 只保留 nav_hidden 作为个人显示偏好。
+  const backendLayout = navigationTree?.menus?.length
+    ? menuNodesToLayout(navigationTree.menus, permittedNav)
+    : null
+  const layout = backendLayout ?? resolveNavLayout(prefs?.nav_layout, permittedNav, prefs?.nav_order)
   const visibleLayout = visibleNavLayout(layout, permittedNav, prefs?.nav_hidden ?? [])
   // 后台功能与前台分离: 前台永远不展示配置/数据管理入口
   const ADMIN_ONLY_NAV = new Set(['/settings', '/admin', '/data', '/branding'])
@@ -211,16 +224,18 @@ export function Layout() {
     && (sidebarFullyVisible || (railMode && railGroupId === watchlistParent?.id)) && watchlistNavExpanded
   const { data: navWatchlist } = useQuery({
     queryKey: QK.watchlist,
-    queryFn: api.watchlistList,
+    queryFn: () => api.watchlistList({ quiet: true }),
     enabled: navGroupPctVisible,
+    retry: false,
     staleTime: 60_000,
   })
   const { data: navEnriched } = useQuery({
     // 无参 → key 归一为 ['watchlist-enriched', ''], 与自选页 (无 ext 列时) 共享缓存,
     // 消除侧栏与自选页各拉一份整表的双份内存
     queryKey: QK.watchlistEnriched(),
-    queryFn: () => api.watchlistEnriched(),
+    queryFn: () => api.watchlistEnriched(undefined, { quiet: true }),
     enabled: navGroupPctVisible,
+    retry: false,
     staleTime: 60_000,
   })
   const navGroupPcts = useMemo(
@@ -235,7 +250,8 @@ export function Layout() {
   // 标签页隐藏时 TanStack 默认暂停轮询 — 转圈提示只在页面可见时有意义, 不再强制后台轮询
   const { data: pipelineJobs } = useQuery({
     queryKey: QK.pipelineJobs,
-    queryFn: () => api.pipelineJobs(1),
+    queryFn: () => api.pipelineJobs(1, { quiet: true }),
+    retry: false,
     refetchInterval: (query) => (query.state.data?.active_id ? 2000 : 15000),
   })
   const isDataSyncing = !!pipelineJobs?.active_id
@@ -281,8 +297,9 @@ export function Layout() {
   const sidebarIndexes = CORE_INDEXES
   const { data: sidebarIndexQuotes } = useQuery({
     queryKey: [...QK.indexQuotes, 'sidebar', 'core'] as const,
-    queryFn: () => api.indexQuotes(sidebarIndexes.map(p => p.symbol)),
+    queryFn: () => api.indexQuotes(sidebarIndexes.map(p => p.symbol), { quiet: true }),
     enabled: sidebarIndexes.length > 0,
+    retry: false,
     placeholderData: (prev) => prev,
   })
 

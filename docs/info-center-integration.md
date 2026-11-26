@@ -223,7 +223,9 @@ Docker / 其他部署只认 `<DATA_DIR>/info_hub`，代码里不写死绝对路�
 - 同一天同一源重复抓取：按源 ID 幂等覆盖；不重复追加。
 - 合并层只由「原始层 + 合并规则」生成，不允许页面直接写合并层。
 - 统一层为空时不得覆盖已有文件；源全失败时保留上一份有效统一层，并记录 `degraded`。
-- 运行锁：`state/sync.lock`，同一时刻只允许一个抓取任务，避免两个源/两个进程交叉写。
+- 运行锁：进程内按 `DATA_DIR` 的单飞锁（`service._sync_lock`）。同一时刻只有一个抓取在跑；
+  定时任务排队（`wait=True`），手动触发并发时返回 409。多 worker 部署目前只保证单进程内
+  串行，需要部署侧让抓取请求落到同一进程。
 
 ### 4.5 保留窗口
 
@@ -422,7 +424,7 @@ Docker / 其他部署只认 `<DATA_DIR>/info_hub`，代码里不写死绝对路�
 | GET | `/api/info/news/{event_id}` | 新闻详情 + 多源 variants |
 | GET | `/api/info/flash` | 快讯分页查询 |
 | GET | `/api/info/timeline?code=&days=&kinds=` | 公司时间线（公告+新闻+研报+快讯） |
-| POST | `/api/info/sync` | 手动抓取：`kinds=announcements,news,flash`；`live=true` 联网抓取；公告可带 `date=YYYY-MM-DD`（默认今天） |
+| POST | `/api/info/sync` | 手动抓取：`kinds=announcements,news,flash`；`live=true` 联网抓取；公告可带 `date=YYYY-MM-DD`（默认今天）。持有任一资讯页权限即可触发，非管理员限近 7 天且不能 `force`/`legacy_root`；同账号 60 秒冷却；抓取进行中返回 409 |
 | POST | `/api/info/reload` | 重读本地数据（用于导入后刷新缓存） |
 
 ### 7.1 公告查询参数
@@ -537,7 +539,7 @@ GET /api/info/timeline?code=600519.SH&days=30&kinds=announcement,news,report,fla
 
 ### 9.1 调度方式
 
-`startup(context)` 内启动扩展自己的后台调度器（项目已有 APScheduler 依赖），只在扩展内运行，不改核心 `daily_pipeline`。单进程桌面模式可直接运行；多进程部署时用 `state/sync.lock` 保证只有一个实例抓取。
+`startup(context)` 内启动扩展自己的后台调度器（项目已有 APScheduler 依赖），只在扩展内运行，不改核心 `daily_pipeline`。单进程桌面模式可直接运行；多进程部署时每个进程都会启动调度器，而单飞锁只在本进程内生效，需要部署侧保证抓取只有一个执行者（或将调度放到独立进程）。
 
 建议任务表沿用两个项目已验证的时间：
 
@@ -717,7 +719,7 @@ git status --short
 | 快讯窗口短 | 明确不可回补区间，页面显示缺口 |
 | 公告 PDF 解析成本高 | 首版只存链接；重要公告摘要作为可选项，后续再加 |
 | 数据体积增长 | 保留窗口 + 按日分区 + 关注池按公司历史；必要时加 DuckDB 物化索引 |
-| 多进程重复调度 | `sync.lock` 单实例；多 worker 部署只允许一个调度者 |
+| 多进程重复调度 | 进程内单飞锁只约束单进程；多 worker 部署需让抓取请求落到同一进程，或改为外部锁 |
 | 与 `cninfo_graph` 重复 | Phase 4 收敛，graph 只保留公司档案/股东/高管，公告/新闻读统一层 |
 
 ### 明确不做（首版）

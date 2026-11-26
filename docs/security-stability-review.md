@@ -22,6 +22,25 @@
 
 > 说明：本次未改动任何业务代码；以上失败不直接等同于产品缺陷。上线门禁建议：CI 标准环境全量绿；若仍有失败，逐项确认是测试过期还是实现回归后再合入。
 
+### 测试失败项复核结论（2026-11-26 实测）
+
+2026-11-26 全量复跑为 **7 failed**（`test_admin_guard.py` 新增 1 项，其余同上表 6 项）。逐项复现后的结论与处置：
+
+| 测试 | 复核结论 | 处置 |
+| --- | --- | --- |
+| `test_ai_provider.py::test_resolve_macos_codex_command_finds_bundled_cli`<br>`…::skips_non_executable_file` | **环境性确认**，非产品缺陷。候选目录 `_MACOS_CODEX_BIN_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")` 是设计内的真实安装位置，测试只 patch 了 `/Applications` 与 `Path.home`，本机确实装有 `/opt/homebrew/bin/codex`，于是解析到系统 CLI。 | 修测试（隔离系统候选目录）、不改实现：用例内 `monkeypatch.setattr(ai_provider, "_MACOS_CODEX_BIN_DIRS", ())`。CI 的 Linux 环境同样不受本机安装影响。 |
+| `test_fuyao_daily_streaming_sync.py::test_sync_promotes_staged_files_without_reading_them_back` | **测试未随「小文件合并」改造同步**。`kline_sync._persist_daily_chunks` 首建分区时用 `pl.scan_parquet(files).collect(streaming)` + `repo.append_daily` 合并当日分片，注释写明是为避免每天分区堆上百个 8KB 小文件与 DuckDB 读放大；落盘侧 `_write_daily_partition` 只写单个 `part.parquet`，`part-stream-*.parquet` 已无生产代码。 | 保留 compaction 实现，改写测试为「压缩成单分区、不读回 staging」：断言 1 个 `part.parquet`、`get_daily_called is False`、staging 已清理。 |
+| `test_mining_lock_admin.py::test_force_release_kills_external_holder_and_takes_over`<br>`…::test_lock_endpoints_full_recovery_loop`<br>`…::test_legacy_lock_holder_force_release_takes_over` | **环境性 + 真实健壮性缺口**。本会话 `SIGTERM` 被置为 `SIG_IGN` 且被子进程继承，`psutil.terminate()` 与 `os.kill` 均无效，才导致 409「未能终止」。但这暴露了真实问题：`force_release` 只发 SIGTERM，持有者忽略信号时端点**永远** 409，用户只能手动 kill。 | 加宽限期后升级 `process.kill()`（SIGKILL）并再等 `_RELEASE_WAIT_SECONDS`；新增回归用例 `test_force_release_escalates_to_sigkill_when_sigterm_ignored`（把 SIGTERM 打成 no-op，验证仍能拿到锁），保证 CI 走 SIGTERM 分支时该逻辑也被覆盖。 |
+| `test_admin_guard.py::test_user_cannot_manage_page_packs` | **测试过期 + fixture 缺失**。守卫契约本就是「读清单/bundle 对扩展页账号开放，管理写仅管理员」（`api/permissions.py::guard_ext_pages_access`）；用例按旧契约断言 GET 403，且未注入 `app.state.repo`，导致 GET 直接 500（`'State' object has no attribute 'repo'`）。 | 改测试：注入 `SimpleNamespace(store=SimpleNamespace(data_dir=…))`，GET `/api/ext-pages` 断言 200，PUT `demo/enabled`、DELETE `demo` 断言 403。 |
+
+复跑结果（本机 macOS，Python 3.11.15）：
+
+- `pytest -q` → **4900 passed, 7 skipped, 1 xfailed**（219.6s，0 failed）；相对旧基线 4892 passed + 7 failed，既清零了失败，也新增了 1 个回归用例。
+- 分组自证：`test_info_hub.py` 13 passed；`test_ai_provider + test_fuyao_daily_streaming_sync + test_admin_guard` 77 passed；`test_mining_lock_admin` 38 passed。
+- 前端：`tsc -b` 无错，`vitest run` 13 passed。
+
+> 遗留提示：以上「环境性」结论仍建议在标准 Linux CI 再跑一遍；`force_release` 的 SIGKILL 升级属行为变更，若生产要求「拒绝而非强杀」，需回退该分支并改文案，而不是再改测试。
+
 ---
 
 ## 1. 架构与线上形态（事实）

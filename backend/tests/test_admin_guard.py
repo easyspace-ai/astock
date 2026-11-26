@@ -114,9 +114,13 @@ def test_user_cannot_call_other_admin_router(user_token):
     assert r.status_code == 403
 
 
-def test_user_cannot_manage_page_packs(user_token):
-    r = _client(user_token).get("/api/ext-pages")
-    assert r.status_code == 403
+def test_user_cannot_manage_page_packs(user_token, data_dir):
+    # 只读清单与 bundle 分发对扩展页账号开放 (扩展页运行需要); 「管理」= 写入。
+    client = _client(user_token)
+    client.app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=data_dir))
+    assert client.get("/api/ext-pages").status_code == 200
+    assert client.put("/api/ext-pages/demo/enabled", json={"enabled": False}).status_code == 403
+    assert client.delete("/api/ext-pages/demo").status_code == 403
 
 
 def test_user_can_load_page_bundle(user_token, data_dir):

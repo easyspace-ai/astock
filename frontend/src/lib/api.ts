@@ -2489,12 +2489,21 @@ export interface AccountUser {
 
 export type PermissionGroupKey = 'page' | 'feature' | 'admin'
 
+/** 权限树节点：分组节点只有 key；页面叶子节点的 key 就是权限码。 */
 export interface PermissionItem {
   key: string
   label: string
   group: PermissionGroupKey
   description: string
+  parent?: string | null
+  order?: number
+  kind?: 'group' | 'permission'
+  route?: string | null
+  source?: string
+  visible?: boolean
 }
+
+export type MenuNode = PermissionItem
 
 export interface RoleGroup {
   key: string
@@ -3047,10 +3056,22 @@ export const api = {
   permissionCatalog: () =>
     request<{
       permissions: PermissionItem[]
+      menus: PermissionItem[]
       groups: Record<PermissionGroupKey, string>
       perm_roles: Array<{ key: string; label: string }>
       role_groups: RoleGroup[]
     }>('/api/admin/permission-catalog'),
+  navigationTree: () =>
+    request<{ menus: MenuNode[] }>('/api/navigation/tree'),
+  saveNavigationLayout: (layout: NavLayout) =>
+    request<{ menus: MenuNode[] }>('/api/navigation/layout', {
+      method: 'PUT',
+      body: JSON.stringify({
+        items: layout.items.map(node => node.type === 'group'
+          ? { type: 'group', key: node.id, label: node.label, children: node.children.map(page => ({ type: 'page', route: page.id })) }
+          : { type: 'page', route: node.id }),
+      }),
+    }),
   adminUsers: (params: { q?: string; page?: number; pageSize?: number } = {}) => {
     const search = new URLSearchParams()
     if (params.q) search.set('q', params.q)
@@ -3422,9 +3443,10 @@ export const api = {
     request<{ status: string }>(`/api/intraday/subscriptions/${encodeURIComponent(clientId)}`, {
       method: 'DELETE', quiet: true, keepalive: true, timeoutMs: 10_000,
     }),
-  indexQuotes: (symbols?: string[]) =>
+  indexQuotes: (symbols?: string[], opts?: { quiet?: boolean }) =>
     request<{ rows: IndexQuote[]; count: number }>(
       `/api/intraday/indices${symbols?.length ? `?symbols=${encodeURIComponent(symbols.join(','))}` : ''}`,
+      { quiet: opts?.quiet },
     ),
   updateRealtimeMonitorConfig: (cfg: {
     sse_refresh_pages?: Record<string, boolean>
@@ -3781,7 +3803,7 @@ export const api = {
       method: 'POST',
     }),
 
-  watchlistList: () => request<{ symbols: WatchlistEntry[] }>('/api/watchlist'),
+  watchlistList: (opts?: { quiet?: boolean }) => request<{ symbols: WatchlistEntry[] }>('/api/watchlist', { quiet: opts?.quiet }),
   watchlistAdd: (symbol: string, note = '', groupId?: string | null) =>
     request<{ symbols: WatchlistEntry[] }>('/api/watchlist', {
       method: 'POST',
@@ -3797,8 +3819,8 @@ export const api = {
         group_ids: groupIds?.length ? groupIds : null,
       }),
     }),
-  watchlistGroups: () =>
-    request<{ groups: WatchlistGroup[] }>('/api/watchlist/groups'),
+  watchlistGroups: (opts?: { quiet?: boolean }) =>
+    request<{ groups: WatchlistGroup[] }>('/api/watchlist/groups', { quiet: opts?.quiet }),
   watchlistGroupCreate: (name: string, color: WatchlistGroupColor) =>
     request<{ groups: WatchlistGroup[]; group: WatchlistGroup }>('/api/watchlist/groups', {
       method: 'POST',
@@ -3885,7 +3907,7 @@ export const api = {
   watchlistClear: () =>
     request<{ removed: number }>('/api/watchlist', { method: 'DELETE' }),
   watchlistQuotes: () => request<{ quotes: Quote[] }>('/api/watchlist/quotes'),
-  watchlistEnriched: (extColumns?: string) =>
+  watchlistEnriched: (extColumns?: string, opts?: { quiet?: boolean }) =>
     request<{
       rows: any[]
       as_of: string | null
@@ -3896,6 +3918,7 @@ export const api = {
       extColumns
         ? `/api/watchlist/enriched?ext_columns=${encodeURIComponent(extColumns)}`
         : '/api/watchlist/enriched',
+      { quiet: opts?.quiet },
     ),
   watchlistPrepare: (symbols: string[]) => request<{ results: WatchlistPrepareResult[] }>(
     '/api/watchlist/prepare',
@@ -4329,9 +4352,10 @@ export const api = {
   /** 手动停止一个 running/pending 的同步任务 (协作式: 当前分块完成后线程自行退出) */
   pipelineJobCancel: (id: string) =>
     request<{ cancelled: string }>(`/api/pipeline/jobs/${id}/cancel`, { method: 'POST' }),
-  pipelineJobs: (limit = 20) =>
+  pipelineJobs: (limit = 20, opts?: { quiet?: boolean }) =>
     request<{ active_id: string | null; jobs: PipelineJobSummary[] }>(
       `/api/pipeline/jobs?limit=${limit}`,
+      { quiet: opts?.quiet },
     ),
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
@@ -5215,8 +5239,8 @@ export const api = {
     request<StrategyPoolSnapshot>(`/api/strategy-pool/groups/${encodeURIComponent(groupId)}`, { method: 'DELETE' }),
 
   // ===== Custom Signals (自定义信号) =====
-  customSignalsList: () =>
-    request<{ signals: CustomSignal[] }>('/api/custom-signals'),
+  customSignalsList: (opts?: { quiet?: boolean }) =>
+    request<{ signals: CustomSignal[] }>('/api/custom-signals', { quiet: opts?.quiet }),
 
   customSignalsOptions: () =>
     request<CustomSignalOptions>('/api/custom-signals/options'),

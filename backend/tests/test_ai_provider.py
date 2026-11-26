@@ -781,6 +781,8 @@ def test_resolve_macos_codex_command_finds_bundled_cli(tmp_path, monkeypatch):
     cli.chmod(0o755)
 
     monkeypatch.setattr(ai_provider, "_MACOS_SYSTEM_APPLICATIONS", tmp_path)
+    # 本机可能真装了 brew/npm 版 codex: 清空系统目录候选, 只验证应用包探测。
+    monkeypatch.setattr(ai_provider, "_MACOS_CODEX_BIN_DIRS", ())
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
 
     assert ai_provider._resolve_macos_codex_command() == str(cli)
@@ -789,6 +791,7 @@ def test_resolve_macos_codex_command_finds_bundled_cli(tmp_path, monkeypatch):
 def test_resolve_macos_codex_command_scans_user_locations(tmp_path, monkeypatch):
     """~/.local/bin (官方安装脚本) 与用户级 Applications 也纳入候选。"""
     monkeypatch.setattr(ai_provider, "_MACOS_SYSTEM_APPLICATIONS", tmp_path / "no-such-apps")
+    monkeypatch.setattr(ai_provider, "_MACOS_CODEX_BIN_DIRS", ())
     home = tmp_path / "home"
     local_bin = home / ".local" / "bin" / "codex"
     local_bin.parent.mkdir(parents=True)
@@ -803,6 +806,7 @@ def test_resolve_macos_codex_command_scans_user_locations(tmp_path, monkeypatch)
 def test_resolve_macos_codex_command_skips_non_executable_file(tmp_path, monkeypatch):
     """同名但无可执行位的文件不是可用 CLI: 只查 is_file 会解析到它, 运行时报错不直观。"""
     monkeypatch.setattr(ai_provider, "_MACOS_SYSTEM_APPLICATIONS", tmp_path / "no-such-apps")
+    monkeypatch.setattr(ai_provider, "_MACOS_CODEX_BIN_DIRS", ())
     home = tmp_path / "home"
     local_bin = home / ".local" / "bin" / "codex"
     local_bin.parent.mkdir(parents=True)

@@ -22,7 +22,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.permissions import current_user, require_permission
-from app.services import rbac, user_store
+from app.config import settings
+from app.services import menu_registry, rbac, user_store
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +46,18 @@ def _is_super(actor: dict | None) -> bool:
     return actor is None or user_store.effective_perm_role(actor) == rbac.SUPER_ADMIN
 
 
+def _data_dir(request: Request):
+    store = getattr(getattr(request.app.state, "repo", None), "store", None)
+    return getattr(store, "data_dir", None) or settings.data_dir
+
+
 @router.get("/permission-catalog", dependencies=[Depends(require_permission(rbac.ADMIN_ACCESS))])
-def permission_catalog() -> dict:
-    """权限目录 + 三组矩阵。前端不硬编码权限清单。"""
+def permission_catalog(request: Request) -> dict:
+    """权限目录 + 菜单树 + 三组矩阵。前端不硬编码权限清单。"""
+    data_dir = _data_dir(request)
     return {
-        "permissions": rbac.catalog(),
+        "permissions": menu_registry.permission_catalog(data_dir),
+        "menus": menu_registry.menu_nodes(data_dir),
         "groups": rbac.GROUP_LABELS,
         "perm_roles": [
             {"key": key, "label": rbac.PERM_ROLE_LABELS[key]} for key in rbac.PERM_ROLES

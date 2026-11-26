@@ -40,7 +40,7 @@ interface Props {
  */
 export function SignalPicker({ signals, onChange, kind, options }: Props) {
   const { variant = 'panel', builtinSignals = [], disabledSignals = [], disabledSignalHint, filterCustomByKind = true } = options ?? {}
-  const customSignalsQuery = useQuery({ queryKey: QK.customSignals, queryFn: api.customSignalsList })
+  const customSignalsQuery = useQuery({ queryKey: QK.customSignals, queryFn: () => api.customSignalsList() })
 
   const customOptions = useMemo(() => {
     const list = (customSignalsQuery.data?.signals ?? [])
