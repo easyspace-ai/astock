@@ -8,7 +8,7 @@
 docs-site/
 ├── index.html            # 产品手册（面向部署者与最终用户）
 ├── delivery-manual.html  # 客户交付说明书：访问方式/使用说明/注意事项/字段说明（单文件，截图与 Logo 已内联，可直接发给客户）
-├── 财富引擎-交付说明书.pdf  # 上述 HTML 的打印版（52 页），随 HTML 一并更新
+├── 财富引擎-交付说明书.pdf  # 上述 HTML 的打印版（54 页），随 HTML 一并更新
 └── README.md             # 本维护说明
 ```
 
@@ -68,6 +68,25 @@ docs-site/
 ```
 
 - 打印样式里 `.section` 必须带 `animation:none!important;opacity:1!important`：页面切换有 `fadeIn` 动画，打印在动画首帧取图会导致首个可见小节整页空白（曾出现封面页空白）。
+- 分页策略：只有「章」（`section.section.chapter`：封面/访问/总览/流程/注意事项/字段说明/常见问题/交付验收）强制另起一页，17 个模块小节连续排版；否则每个小节另起一页会在章末留下大量空白页。
+- 打印时图片限高 `.figure img{max-height:104mm}`（登录页单独 128mm），避免整幅截图撑满一页把正文挤散；`h2/h3` 加 `page-break-after:avoid` 防止标题落在页脚。
+
+## 截图维护（交付说明书内联图）
+
+文档内 27 张界面图全部取自交付实例的真实界面（新品牌「财富引擎」浅色主题），内联为 JPEG data URI，单文件约 2.6MB。
+
+重截流程（在有 Chrome 的 macOS 上）：
+
+1. **取登录态**：生产无 ADMIN 变量，直接在 `/opt/tsp/backend` 的 venv 里铸造会话
+   `TICKFLOW_ENV_FILE=/opt/tsp/.env PYTHONPATH=/opt/tsp/backend .venv/bin/python -c "from app.services import user_store; print(user_store.create_session(1))"`，
+   写入本机临时文件（勿提交），Cookie 名 `tf_user_session`。
+2. **驱动浏览器**：`puppeteer-core` + 本机 Chrome（`--headless=new --no-sandbox --disable-gpu --hide-scrollbars --no-proxy-server`），视口 1600×1000、`deviceScaleFactor 2`。
+   必须加 `--no-proxy-server`：macOS 系统代理会让页面返回 `ERR_CONTENT_LENGTH_MISMATCH`。
+3. **需要交互的页面**：`/stock-analysis`、`/financials` 不读 URL 参数，靠 `localStorage.last_stock` 预置标的；监控「新建规则」按钮无文字，用 `button[title="新建规则"]` 点击。
+4. **裁切与压缩**：裁掉左侧菜单（源图 x≥478）与顶栏、底栏，只留内容区；登录页只裁中间卡片。统一缩放到宽 1280、JPEG q76；内容稀疏的页面（如自选仅两行）再按内容底部裁掉空白，避免图里大块留白。
+5. **回填**：图片按 `alt` 精确定位替换 `<img>` 的 data URI（`alt` 与临时文件名一一对应），改完跑下方结构校验并重出 PDF。
+
+隐私：截图中不得出现账号邮箱（设置页顶栏已裁掉）、密码、Token；`/tmp` 下的会话凭据用完后可在服务端删除对应 session。
 
 ## 校验
 
