@@ -20,6 +20,7 @@ from app.factors.registry import (
     unregister_factor,
 )
 from app.market_time import cn_today
+from app.services import tenant
 
 router = APIRouter(prefix="/api/factors", tags=["factors"])
 
@@ -34,6 +35,7 @@ def list_factors(request: Request, asset_type: str | None = Query(default=None, 
     """
     status_by_id: dict[str, str] = {}
     archived_by_id: dict[str, bool] = {}
+    owner_by_id: dict[str, int | None] = {}
     hidden: set[str] = set()
     # 数据目录不可用时退化为不带 status — 内置因子列表不因此不可用
     with contextlib.suppress(HTTPException):
@@ -47,6 +49,7 @@ def list_factors(request: Request, asset_type: str | None = Query(default=None, 
         }
         status_by_id = {fid: str(d.get("status", "draft")) for fid, d in disk.items()}
         archived_by_id = {fid: d.get("archived") is True for fid, d in disk.items()}
+        owner_by_id = {fid: owner for owner, d in store.visible_owned(data_dir) if (fid := str(d.get("id")))}
     specs = [spec for spec in all_factors(asset_type=asset_type) if spec.id not in hidden]
     return {
         "factors": [
@@ -65,6 +68,9 @@ def list_factors(request: Request, asset_type: str | None = Query(default=None, 
                 "stability": spec.stability,
                 "status": status_by_id.get(spec.id),
                 "archived": archived_by_id.get(spec.id, False),
+                # owner=None 且盘上有定义 = 共享层自定义因子: 对本账号只读
+                "owner": owner_by_id.get(spec.id),
+                "read_only": spec.id in owner_by_id and owner_by_id[spec.id] is None and tenant.is_tenant(),
                 "scale_free": spec.scale_free,
                 "dependencies": sorted(factor_dependencies([spec.id])) if spec.inputs else [],
             }

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, ArchiveRestore, Plus, Settings2, Trash2, Zap } from 'lucide-react'
+import { Archive, ArchiveRestore, EyeOff, Plus, Settings2, Trash2, Zap } from 'lucide-react'
 import { api, type CustomSignal } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { refreshResourceQueries } from '@/lib/importCenter'
@@ -39,7 +39,12 @@ export function Signals() {
 
 function SignalsBody({ highlight }: { highlight: string }) {
   const qc = useQueryClient()
-  const list = useQuery({ queryKey: QK.customSignals, queryFn: () => api.customSignalsList(), staleTime: 60_000 })
+  // includeHidden: 管理页要拿到已隐藏的内置信号, 才能给「恢复」入口; 选择器默认不带
+  const list = useQuery({
+    queryKey: QK.customSignalsAdmin,
+    queryFn: () => api.customSignalsList({ includeHidden: true }),
+    staleTime: 60_000,
+  })
   const options = useQuery({ queryKey: QK.customSignalsOptions, queryFn: api.customSignalsOptions, staleTime: 60_000 })
 
   const [showForm, setShowForm] = useState(false)
@@ -51,8 +56,12 @@ function SignalsBody({ highlight }: { highlight: string }) {
   const fields = options.data?.fields ?? []
   const allSignals = list.data?.signals ?? []
   const archivedSignals = allSignals.filter(sig => sig.archived)
-  // 信号库隐藏已归档, 档案库只看已归档 — 归档可逆, 不删除定义、不影响已引用它的策略
-  const signalRows = view === 'archive' ? archivedSignals : allSignals.filter(sig => !sig.archived)
+  // 已隐藏的内置信号: 只影响自己的列表, 共享定义仍在、照常编译注入
+  const hiddenSignals = allSignals.filter(sig => sig.hidden)
+  // 信号库隐藏已归档与已隐藏, 档案库只看已归档 — 归档可逆, 不删除定义、不影响已引用它的策略
+  const signalRows = view === 'archive'
+    ? archivedSignals
+    : allSignals.filter(sig => !sig.archived && !sig.hidden)
   // 内置(共享层)信号只读: 排在后面, 卡片上只给「内置·只读」标记, 不给写入口
   const mineSignals = signalRows.filter(sig => !sig.read_only)
   const builtinSignals = signalRows.filter(sig => sig.read_only)
@@ -98,6 +107,15 @@ function SignalsBody({ highlight }: { highlight: string }) {
     onSuccess: (_data, variables) => {
       toast(variables.archived ? '已归档到档案库，可随时恢复' : '已恢复到信号库', 'success')
       void refreshResourceQueries(qc)
+    },
+    onError: (error: Error) => toast(`操作失败 · ${error.message}`, 'error'),
+  })
+
+  const setHidden = useMutation({
+    mutationFn: ({ id, hidden }: { id: string; hidden: boolean }) => api.customSignalHide(id, hidden),
+    onSuccess: (_data, variables) => {
+      toast(variables.hidden ? '已从列表隐藏，内置定义和已引用它的策略都不受影响' : '已恢复到信号库', 'success')
+      void qc.invalidateQueries({ queryKey: QK.customSignals })
     },
     onError: (error: Error) => toast(`操作失败 · ${error.message}`, 'error'),
   })
@@ -183,7 +201,17 @@ function SignalsBody({ highlight }: { highlight: string }) {
                     )}
                   </div>
                   {sig.read_only ? (
-                    <span className="shrink-0 text-[10px] text-muted">内置 · 只读</span>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <span className="text-[10px] text-muted">内置 · 只读</span>
+                      <button
+                        onClick={() => setHidden.mutate({ id: sig.id, hidden: true })}
+                        disabled={setHidden.isPending}
+                        title="从我的列表隐藏 (共享定义不动, 已引用它的策略照常计算; 可在「已隐藏」里恢复)"
+                        className="cursor-pointer rounded p-1 text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                      >
+                        <EyeOff className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   ) : (
                   <div className="flex shrink-0 items-center gap-1">
                     {sig.archived ? (
@@ -250,6 +278,29 @@ function SignalsBody({ highlight }: { highlight: string }) {
               </div>
               </Fragment>
             ))}
+            {view === 'library' && hiddenSignals.length > 0 && (
+              <>
+                <div className="text-[11px] font-medium text-muted md:col-span-2">
+                  已隐藏 · {hiddenSignals.length} · 仍参与计算
+                </div>
+                {hiddenSignals.map(sig => (
+                  <div key={sig.id} className="flex items-center justify-between gap-3 rounded-card border border-dashed border-border bg-base/60 px-4 py-2.5">
+                    <div className="min-w-0">
+                      <span className="truncate text-xs text-secondary">{sig.name}</span>
+                      <p className="truncate font-mono text-[10px] text-muted/70">{sig.column ?? `csg_${sig.id}`}</p>
+                    </div>
+                    <button
+                      onClick={() => setHidden.mutate({ id: sig.id, hidden: false })}
+                      disabled={setHidden.isPending}
+                      title="恢复到信号库"
+                      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded border border-accent/30 px-1.5 py-0.5 text-[10px] text-accent hover:bg-accent/10 disabled:opacity-50"
+                    >
+                      <ArchiveRestore className="h-3 w-3" />恢复
+                    </button>
+                  </div>
+                ))}
+              </>
+            )}
             {list.isLoading &&
               Array.from({ length: 2 }).map((_, i) => (
                 <div key={`sk-${i}`} className="space-y-3 rounded-card border border-border bg-base p-4">

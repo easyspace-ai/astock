@@ -168,7 +168,7 @@ export function FactorLibrary({ onInspect, onEdit }: { onInspect: (factorId: str
                       onEdit={onEdit}
                       onSetArchived={
                         // 归档只对盘上定义 (自定义/复合) 有意义; 内置因子无 archived 状态
-                        (item.kind === 'custom' || item.kind === 'composite') && !setArchived.isPending
+                        (item.kind === 'custom' || item.kind === 'composite') && !item.read_only && !setArchived.isPending
                           ? next => setArchived.mutate({ id: item.id, archived: next })
                           : undefined
                       }
@@ -223,6 +223,11 @@ function FactorCard({
             {statusOf(item).label}
           </span>
         )}
+        {item.read_only && (
+          <span className="inline-flex shrink-0 rounded-btn bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-muted" title="共享层自定义因子: 对所有账号只读, 可直接引用但不能编辑/改状态/归档">
+            共享 · 只读
+          </span>
+        )}
         {item.pit && (
           <span className="shrink-0 text-[10px] text-amber-500" title="点时数据: 仅使用公告日不晚于当日的财务数据">点时</span>
         )}
@@ -234,7 +239,7 @@ function FactorCard({
           {item.warmup_bars > 1 ? `预热 ${item.warmup_bars} 日` : '无预热'} · {assetLabel}
         </span>
         <div className="flex shrink-0 items-center gap-0.5">
-          {item.kind === 'custom' && onEdit && !item.archived && (
+          {item.kind === 'custom' && onEdit && !item.archived && !item.read_only && (
             <button
               type="button"
               onClick={event => { event.stopPropagation(); onEdit(item.id) }}
@@ -244,7 +249,7 @@ function FactorCard({
               编辑
             </button>
           )}
-          {onSetArchived && (
+          {onSetArchived && !item.read_only && (
             <button
               type="button"
               onClick={event => { event.stopPropagation(); onSetArchived(!item.archived) }}
@@ -298,7 +303,8 @@ function FactorDetailModal({
     },
     onError: (error: Error) => toast(`操作失败 · ${error.message}`, 'error'),
   })
-  const isDynamic = item.kind === 'custom' || item.kind === 'composite'
+  // 共享层自定义因子对本账号只读: 详情可看, 但不给分组/状态/归档/编辑入口
+  const isDynamic = (item.kind === 'custom' || item.kind === 'composite') && !item.read_only
   const [groupDraft, setGroupDraft] = useState(item.group)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [blockedRefs, setBlockedRefs] = useState<string[] | null>(null)
@@ -450,6 +456,11 @@ function FactorDetailModal({
             </div>
           </div>
         )}
+        {item.read_only && (
+          <div className="mt-4 rounded-btn border border-border bg-base/40 px-3 py-2 text-[11px] leading-relaxed text-muted">
+            共享因子 · 只读：定义在共享层，对所有账号一致，可直接在策略/检验里引用，但不能编辑、改状态或归档。
+          </div>
+        )}
         <div className="mt-4 rounded-btn border border-border bg-base/40 px-3 py-2 text-[11px] leading-relaxed text-muted">
           方向说明：因子方向不预填，以最近一次检验的 IC 符号为准（IC 为正 = 值大看多）。到「发现」页运行后可查看。
         </div>
@@ -464,7 +475,7 @@ function FactorDetailModal({
           <Sparkles className="h-3 w-3" />
           生成策略
         </button>
-        {item.kind === 'custom' && onEdit && (
+        {item.kind === 'custom' && onEdit && !item.read_only && (
           <button
             type="button"
             onClick={() => { onClose(); onEdit(item.id) }}

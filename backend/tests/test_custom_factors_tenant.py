@@ -111,3 +111,38 @@ def test_other_account_factor_not_listed(tmp_path):
             assert rows["uf_listed"]["formula"] == "close - open"
     finally:
         unregister_factor("uf_listed")
+
+
+def test_shared_factor_is_read_only_for_every_account(tmp_path):
+    """共享层自定义因子对账号是只读 (owner=None, read_only=True), 本人因子可写。"""
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.factors import router
+    from app.factors.registry import unregister_factor
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    client = TestClient(app)
+
+    with tenant.user_scope(None):
+        store.save_one(tmp_path, _definition("uf_shared", "共享因子"))
+        store.register_definition(_definition("uf_shared", "共享因子"))
+    try:
+        with tenant.user_scope(1):
+            rows = {f["id"]: f for f in client.get("/api/factors").json()["factors"]}
+            shared = rows["uf_shared"]
+            assert shared["owner"] is None and shared["read_only"] is True
+            # 内置因子不在盘上, 不带 owner/read_only 语义
+            assert rows["rsi_14"]["read_only"] is False and rows["rsi_14"]["owner"] is None
+
+            store.save_one(tmp_path, _definition("uf_mine", "我的因子"))
+            store.register_definition(_definition("uf_mine", "我的因子"))
+            mine = {f["id"]: f for f in client.get("/api/factors").json()["factors"]}["uf_mine"]
+            assert mine["owner"] == 1 and mine["read_only"] is False
+    finally:
+        unregister_factor("uf_shared")
+        unregister_factor("uf_mine")

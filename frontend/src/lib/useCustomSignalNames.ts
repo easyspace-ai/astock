@@ -6,7 +6,8 @@ import { QK } from '@/lib/queryKeys'
 /**
  * 信号定义 → 输出列名 → 用户命名 的映射。
  *
- * 复用 QK.customSignals 查询 (与 SignalPicker/信号库共享缓存, 不额外发请求)。
+ * 复用信号库的全量视图 QK.customSignalsAdmin (含已隐藏项): 隐藏只影响选择器,
+ * 已被策略/监控引用的列仍要显示用户命名。失效仍走 QK.customSignals 前缀。
  * 告警/监控等展示侧应把返回值传给 cnSignal 第二参数 — 不传时 csg_/csgi_/
  * 迁移的 signal_* 会显示原始列名而非用户命名。
  *
@@ -16,8 +17,8 @@ import { QK } from '@/lib/queryKeys'
  */
 export function useCustomSignalNames(): Record<string, string> {
   const query = useQuery({
-    queryKey: QK.customSignals,
-    queryFn: () => api.customSignalsList({ quiet: true }),
+    queryKey: QK.customSignalsAdmin,
+    queryFn: () => api.customSignalsList({ quiet: true, includeHidden: true }),
     retry: false,
   })
   return useMemo(() => {

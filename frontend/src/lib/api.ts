@@ -1077,6 +1077,8 @@ export interface CustomSignal {
   owner?: number | null
   /** 只读: 共享层在账号模式下不可编辑/归档/删除, 只能引用 */
   read_only?: boolean
+  /** 已被本账号隐藏 (只影响自己的列表与选择器, 不影响编译) */
+  hidden?: boolean
 }
 
 export interface CustomSignalFieldGroup {
@@ -1582,6 +1584,10 @@ export interface FactorLibraryItem {
   archived: boolean
   scale_free: boolean
   dependencies: string[]
+  /** 归属账号: null = 共享层(内置/共享自定义), number = 该账号私有 */
+  owner?: number | null
+  /** 只读: 共享层自定义因子在账号模式下不可编辑/改状态/归档/删除 */
+  read_only?: boolean
 }
 
 export interface FactorDslError {
@@ -5247,8 +5253,19 @@ export const api = {
     request<StrategyPoolSnapshot>(`/api/strategy-pool/groups/${encodeURIComponent(groupId)}`, { method: 'DELETE' }),
 
   // ===== Custom Signals (自定义信号) =====
-  customSignalsList: (opts?: { quiet?: boolean }) =>
-    request<{ signals: CustomSignal[] }>('/api/custom-signals', { quiet: opts?.quiet }),
+  /** includeHidden: 管理页传 true 才能拿到「已隐藏」分组; 选择器默认不带 */
+  customSignalsList: (opts?: { quiet?: boolean; includeHidden?: boolean }) =>
+    request<{ signals: CustomSignal[] }>(
+      `/api/custom-signals${opts?.includeHidden ? '?include_hidden=true' : ''}`,
+      { quiet: opts?.quiet },
+    ),
+
+  /** 隐藏/恢复内置信号: 只写自己的视图清单, 共享定义与编译不受影响 */
+  customSignalHide: (id: string, hidden: boolean) =>
+    request<{ ok: boolean; id: string; hidden: boolean; hidden_count: number }>(
+      `/api/custom-signals/${encodeURIComponent(id)}/${hidden ? 'hide' : 'unhide'}`,
+      { method: 'POST' },
+    ),
 
   customSignalsOptions: () =>
     request<CustomSignalOptions>('/api/custom-signals/options'),

@@ -159,6 +159,8 @@ export const QK = {
 
   // Custom Signals
   customSignals:        ['custom-signals'] as const,
+  /** 管理页/展示映射用的全量视图 (含已隐藏的内置信号); 前缀仍是 custom-signals, 失效一并覆盖 */
+  customSignalsAdmin:   ['custom-signals', 'admin'] as const,
   customSignalsOptions: ['custom-signals-options'] as const,
 
   // Monitor (监控规则 + 触发记录)

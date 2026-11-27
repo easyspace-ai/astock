@@ -62,6 +62,8 @@ _ACCOUNT_PRIVATE_FILES = {
     "ai_stock_reports.json": "reports",
     "assistant_sessions.json": "history",
     "strategy_pool.json": "strategy_pool",
+    # 账号级隐藏清单 (隐藏了哪些内置信号): 属于个人视图偏好, 随信号一起备份
+    "custom_signals_hidden.json": "custom_signals",
 }
 
 # 类别注册表 — 导出枚举、导入校验、结果展示共用一份。

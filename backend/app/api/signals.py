@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.factors import store as factors_store
@@ -196,11 +196,25 @@ def _shared_read_only() -> bool:
 
 
 @router.get("")
-def list_signals(request: Request):
+def list_signals(request: Request, include_hidden: bool = Query(default=False)):
+    """信号库列表。
+
+    include_hidden=False (选择器/默认) 时跳过本账号隐藏的内置信号;
+    管理页传 true, 并据 ``hidden`` 字段把它们放进「已隐藏」分组, 可一键恢复。
+    """
     data_dir = _data_dir(request)
+    hidden = custom_signals.load_hidden(data_dir)
     signals = []
     for owner, sig in custom_signals.visible_owned(data_dir):
-        signals.append({**sig, "owner": owner, "read_only": owner is None and _shared_read_only()})
+        is_hidden = owner is None and str(sig.get("id")) in hidden
+        if is_hidden and not include_hidden:
+            continue
+        signals.append({
+            **sig,
+            "owner": owner,
+            "read_only": owner is None and _shared_read_only(),
+            "hidden": is_hidden,
+        })
     return {"signals": signals}
 
 
@@ -300,6 +314,37 @@ async def ai_generate_signal(req: AIGenerateRequest, request: Request):
         return custom_signals_ai.parse_and_validate(text)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+# ── 隐藏内置信号 (只影响自己的列表, 不动共享定义) ───────
+
+
+def _set_hidden(signal_id: str, hidden: bool, request: Request) -> dict:
+    """隐藏/恢复一个内置信号: 只写本账号的隐藏清单, 共享层一个字不改,
+    信号照常编译注入 (已引用它的策略/监控不受影响)。"""
+    if not custom_signals.ID_RE.match(signal_id):
+        raise HTTPException(status_code=400, detail="信号 id 非法")
+    data_dir = _data_dir(request)
+    exists, owner = _owner_of(data_dir, signal_id)
+    if not exists:
+        raise HTTPException(status_code=404, detail="信号不存在")
+    if owner is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="隐藏只对内置信号生效；自己创建的信号请用「归档」，归档可随时恢复",
+        )
+    ids = custom_signals.set_hidden(data_dir, signal_id, hidden)
+    return {"ok": True, "id": signal_id, "hidden": hidden, "hidden_count": len(ids)}
+
+
+@router.post("/{signal_id}/hide")
+def hide_signal(signal_id: str, request: Request):
+    return _set_hidden(signal_id, True, request)
+
+
+@router.post("/{signal_id}/unhide")
+def unhide_signal(signal_id: str, request: Request):
+    return _set_hidden(signal_id, False, request)
 
 
 # ── 归档 / 恢复 (可逆, 不删除文件, 不影响计算) ──────────

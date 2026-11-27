@@ -229,6 +229,51 @@ def hidden_ids(data_dir: Path) -> set[str]:
     return {str(item.get("id")) for _owner, item in iter_owned(data_dir)} - visible
 
 
+# ── 账号级隐藏内置信号 (只影响自己的列表, 不动共享定义) ──────────
+HIDDEN_FILE = "custom_signals_hidden.json"
+
+
+def _hidden_path(data_dir: Path, *, ensure_dir: bool = False) -> Path:
+    """隐藏清单位置: 有账号 → users/<uid>/, 无账号 → 共享层(单用户语义)。"""
+    uid = tenant.current_user_id()
+    if uid is None:
+        return Path(data_dir) / "user_data" / HIDDEN_FILE
+    d = Path(data_dir) / "user_data" / "users" / str(uid)
+    if ensure_dir:
+        d.mkdir(parents=True, exist_ok=True)
+    return d / HIDDEN_FILE
+
+
+def load_hidden(data_dir: Path) -> set[str]:
+    """当前账号隐藏的内置信号 id; 无文件/损坏一律视为空集 (不阻断列表)。"""
+    p = _hidden_path(data_dir)
+    if not p.exists():
+        return set()
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001 — 损坏只告警, 不回退丢列表
+        logger.warning("custom signal hidden list load failed: %s", e)
+        return set()
+    ids = raw.get("hidden") if isinstance(raw, dict) else None
+    if not isinstance(ids, list):
+        return set()
+    return {str(i) for i in ids if isinstance(i, str)}
+
+
+def set_hidden(data_dir: Path, signal_id: str, hidden: bool) -> set[str]:
+    """增删一条隐藏记录并落盘; 返回更新后的隐藏集合。"""
+    ids = load_hidden(data_dir)
+    if hidden:
+        ids.add(signal_id)
+    else:
+        ids.discard(signal_id)
+    atomic_write_text(
+        _hidden_path(data_dir, ensure_dir=True),
+        json.dumps({"hidden": sorted(ids)}, ensure_ascii=False, indent=2),
+    )
+    return ids
+
+
 def load_all(data_dir: Path) -> list[dict]:
     """全部自定义信号 (账号 + 共享并集)。损坏的文件被跳过。"""
     return [sig for _owner, sig in iter_owned(data_dir)]
