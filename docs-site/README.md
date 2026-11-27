@@ -6,8 +6,10 @@
 
 ```text
 docs-site/
-├── index.html      # 手册本体：内联 CSS / JS，hash 路由 + 左侧导航 + 搜索过滤
-└── README.md       # 本维护说明
+├── index.html            # 产品手册（面向部署者与最终用户）
+├── delivery-manual.html  # 客户交付说明书：访问方式/使用说明/注意事项/字段说明（单文件，截图与 Logo 已内联，可直接发给客户）
+├── 财富引擎-交付说明书.pdf  # 上述 HTML 的打印版（52 页），随 HTML 一并更新
+└── README.md             # 本维护说明
 ```
 
 品牌 Logo 引用 `../brand/` 下的 SVG；移动 `docs-site/` 时请保持与 `brand/` 的相对位置，或把图片改为本地内联/同目录引用。
@@ -48,6 +50,24 @@ docs-site/
 - 表格沿用现有 `<table>` 样式，无需额外类名。
 - 端口、路径、能力键等以 `docs/configuration.md` 与源码为准；默认端口 `3018`。
 - 不写投资收益承诺；涉及策略表现统一标注“研究结果，不构成投资建议”。
+
+## 交付说明书（delivery-manual.html）
+
+- 面向客户的验收文档，结构固定为「交付概览 → 访问与登录 → 系统总览 → 使用说明（17 节）→ 注意事项 → 字段说明 → 常见问题 → 交付验收」。
+- 单文件自包含：截图以 JPEG data URI 内联、Logo 以 SVG data URI 内联，不依赖 `brand/` 与 `screenshots/`，可直接邮件发送或用浏览器「打印 → 另存为 PDF」。
+- 字段说明的行情/指标表由 `backend/app/indicators/pipeline.py` 的 `ENRICHED_COLUMNS` 生成，新增字段时同步更新该表。
+- 交付前需替换：封面「交付方 / 接收方」、访问地址、支持联系人、验收清单结果。
+- PDF 版由同一份 HTML 打印生成，改完 HTML 必须重出 PDF（`--no-pdf-header-footer` 去掉页眉页脚）：
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless=new --disable-gpu --no-sandbox --user-data-dir=/tmp/chrome-pdf \
+  --no-pdf-header-footer \
+  --print-to-pdf="docs-site/财富引擎-交付说明书.pdf" \
+  "file://$PWD/docs-site/delivery-manual.html"
+```
+
+- 打印样式里 `.section` 必须带 `animation:none!important;opacity:1!important`：页面切换有 `fadeIn` 动画，打印在动画首帧取图会导致首个可见小节整页空白（曾出现封面页空白）。
 
 ## 校验
 
