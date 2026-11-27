@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from app.factors import store as factors_store
 from app.strategy import custom_signals
 from app.strategy.intraday_features import INTRADAY_FEATURES
 
@@ -83,8 +84,12 @@ class AIGenerateRequest(BaseModel):
 
 
 @router.get("/options")
-def get_options():
-    """返回可选字段与运算符，供前端下拉框使用。"""
+def get_options(request: Request):
+    """返回可选字段与运算符，供前端下拉框使用。
+
+    因子组只列「本人 + 共享」: 他人账号的私有因子不进这里的下拉项
+    (编译层仍是全站并集, 只是不给出口)。
+    """
     # 字段带中文标签（取自 ENRICHED_COLUMNS，回退为字段名本身）
     from app.indicators.pipeline import ENRICHED_COLUMNS, ENRICHED_COLUMNS_BY_CATEGORY
 
@@ -117,8 +122,12 @@ def get_options():
     from app.factors.registry import all_factors
 
     factor_groups: dict[str, list[dict[str, str]]] = {}
+    try:
+        hidden_factors = factors_store.hidden_ids(_data_dir(request))
+    except (AttributeError, TypeError):
+        hidden_factors = set()  # 无 repo 上下文 (单测直连) 时不做过滤
     for spec in all_factors():
-        if spec.id in allowed:
+        if spec.id in allowed or spec.id in hidden_factors:
             continue
         label = spec.label
         if spec.warmup_bars > 1:
@@ -258,7 +267,7 @@ def save_signal(req: SignalModel, request: Request):
 
 
 @router.post("/ai/generate")
-async def ai_generate_signal(req: AIGenerateRequest):
+async def ai_generate_signal(req: AIGenerateRequest, request: Request):
     """AI 根据自然语言描述生成自定义信号条件。
 
     不落盘：只返回 {name, conditions} 供前端回填表单，由用户确认后走
@@ -273,7 +282,11 @@ async def ai_generate_signal(req: AIGenerateRequest):
     if len(description) > 500:
         raise HTTPException(status_code=400, detail="描述过长（最多 500 字）")
 
-    messages = custom_signals_ai.build_messages(description)
+    try:
+        data_dir = _data_dir(request)
+    except (AttributeError, TypeError):
+        data_dir = None  # 无 repo 上下文 (单测直连) 时退回全量字段清单
+    messages = custom_signals_ai.build_messages(description, data_dir)
     try:
         # max_tokens=None 不传上限: 推理模型思考 token 计入预算, 显式限制
         # 会挤占正文导致 JSON 截断/0 字 (与四个分析器同因, 见 0ee3aa8)
@@ -383,8 +396,12 @@ def intraday_replay(req: IntradayReplayRequest, request: Request):
         raise HTTPException(status_code=400, detail="单次回放最多 200 只标的")
 
     # 信号定义必须存在且为盘中类型
+    data_dir = _data_dir(request)
+    if req.signal_id in custom_signals.hidden_ids(data_dir):
+        # 他人账号的私有信号: 按 id 也不暴露存在性 (与本账号没有该信号同义)
+        raise HTTPException(status_code=404, detail="信号不存在")
     sig = next(
-        (s for s in custom_signals.load_all(_data_dir(request)) if s.get("id") == req.signal_id),
+        (s for s in custom_signals.load_all(data_dir) if s.get("id") == req.signal_id),
         None,
     )
     if sig is None:

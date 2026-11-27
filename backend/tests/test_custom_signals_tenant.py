@@ -115,3 +115,30 @@ def test_global_mode_keeps_shared_writable(tmp_path):
     assert on_disk.is_file()
     assert tenant.current_user_id() is None
     assert client.delete("/api/custom-signals/acct_sig").status_code == 200
+
+
+def test_other_account_signal_not_enumerable(tmp_path):
+    """他人账号的私有信号: 目录/按 id 复检都当不存在, 盘中回放也不放行。"""
+    from app import definitions as defs
+
+    client = _client(tmp_path)
+    with tenant.user_scope(1):
+        assert client.post("/api/custom-signals", json=_SIGNAL).status_code == 200
+
+    with tenant.user_scope(2):
+        assert defs.catalog(tmp_path) == []
+        assert "acct_sig" in custom_signals.hidden_ids(tmp_path)
+        try:
+            defs.smoke_stored("signal", "acct_sig", tmp_path)
+        except Exception as exc:  # HTTPException(404)
+            assert getattr(exc, "status_code", None) == 404
+        else:
+            raise AssertionError("他人信号不应可按 id 复检")
+        replay = client.post("/api/custom-signals/intraday/replay", json={
+            "signal_id": "acct_sig", "symbols": ["600000.SH"],
+            "start_date": "2026-11-01", "end_date": "2026-11-05",
+        })
+        assert replay.status_code == 404
+
+    with tenant.user_scope(1):
+        assert [i["id"] for i in defs.catalog(tmp_path)] == ["acct_sig"]

@@ -32,17 +32,22 @@ def list_factors(request: Request, asset_type: str | None = Query(default=None, 
     因子有): registry 的 stability 是 status 的二元投影 (active→stable, 其余
     →experimental), 管理界面需要完整状态, 在此按 id 合并下发。
     """
-    specs = all_factors(asset_type=asset_type)
     status_by_id: dict[str, str] = {}
     archived_by_id: dict[str, bool] = {}
+    hidden: set[str] = set()
     # 数据目录不可用时退化为不带 status — 内置因子列表不因此不可用
     with contextlib.suppress(HTTPException):
+        data_dir = _data_dir(request)
+        # 注册表是进程级全局的 (计算必须能看到全站列), 但因子库只能展示
+        # 「本人 + 共享」: 他人账号的定义连 formula 一起藏起来。
+        hidden = store.hidden_ids(data_dir)
         disk = {
             str(definition.get("id")): definition
-            for definition in store.load_all(_data_dir(request))
+            for _owner, definition in store.visible_owned(data_dir)
         }
         status_by_id = {fid: str(d.get("status", "draft")) for fid, d in disk.items()}
         archived_by_id = {fid: d.get("archived") is True for fid, d in disk.items()}
+    specs = [spec for spec in all_factors(asset_type=asset_type) if spec.id not in hidden]
     return {
         "factors": [
             {

@@ -278,7 +278,10 @@ class AIStrategyGenerator:
 
     def _signal_columns(self) -> set[str]:
         # 与行情管线使用同一编译入口，禁用或无法编译的定义不能用于回测。
-        expressions = custom_signals.build_expressions(custom_signals.load_all(self._data_dir))
+        # 提示词只给「本人 + 共享」的列: 别人账号的私有信号不该出现在生成上下文里。
+        expressions = custom_signals.build_expressions(
+            [sig for _owner, sig in custom_signals.visible_owned(self._data_dir)]
+        )
         return {column for column in expressions if column.startswith(("signal_", "csg_"))}
 
     async def generate(self, user_prompt: str) -> dict:

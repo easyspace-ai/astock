@@ -31,7 +31,7 @@ _QUOTE_FIELDS = {
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*\n?(.*?)```", re.DOTALL)
 
 
-def _format_fields() -> str:
+def _format_fields(data_dir=None) -> str:
     """按类别格式化白名单字段(key(中文标签)), 供 LLM 参考.
 
     行情/指标类物理列之后追加注册表因子, 分组与 /api/custom-signals/options
@@ -50,12 +50,18 @@ def _format_fields() -> str:
                 f"{label}: "
                 + ", ".join(f"{f}({ENRICHED_COLUMNS.get(f, f)})" for f in fields)
             )
+    from app.factors import store as factors_store
     from app.factors.registry import all_factors
 
+    # 提示词只列「本人 + 共享」的因子: 他人账号的私有因子不进生成上下文
+    try:
+        hidden = factors_store.hidden_ids(data_dir) if data_dir is not None else set()
+    except (AttributeError, TypeError):
+        hidden = set()
     factor_groups: dict[str, list[str]] = {}
     for spec in all_factors():
-        if spec.id in custom_signals.ALLOWED_FIELDS:
-            continue  # 已作为物理列出现在清单里
+        if spec.id in custom_signals.ALLOWED_FIELDS or spec.id in hidden:
+            continue  # 已作为物理列出现在清单里 / 属于他人账号
         label = spec.label
         if spec.asset_types == frozenset({"stock"}):
             label += "·仅股票"
@@ -104,10 +110,13 @@ _SYSTEM_TEMPLATE = """你是A股量化信号设计专家。用户会描述一个
 4. 多条件必须能同时满足，不要输出互相矛盾的条件。"""
 
 
-def build_messages(description: str) -> list[dict]:
-    """组装 LLM 消息：[system 提示词, user 描述]。"""
+def build_messages(description: str, data_dir=None) -> list[dict]:
+    """组装 LLM 消息：[system 提示词, user 描述]。
+
+    data_dir 用于把因子清单限定在当前账号可见范围; 省略时保持全量(纯函数单测)。
+    """
     system = _SYSTEM_TEMPLATE.format(
-        fields=_format_fields(),
+        fields=_format_fields(data_dir),
         max_days=custom_signals.MAX_DAYS,
     )
     return [

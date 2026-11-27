@@ -82,3 +82,32 @@ def test_global_mode_keeps_shared_writable(tmp_path):
     store.save_one(tmp_path, _definition("uf_any"))
     assert (tmp_path / "user_data/custom_factors/uf_any.json").is_file()
     assert store.delete_one(tmp_path, "uf_any") is True
+
+
+def test_other_account_factor_not_listed(tmp_path):
+    """因子库只能列出本人+共享: 他人账号的定义(含 formula)不出现。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from types import SimpleNamespace
+
+    from app.api.factors import router
+    from app.factors.registry import unregister_factor
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    client = TestClient(app)
+
+    with tenant.user_scope(1):
+        store.register_definition(_definition("uf_listed", "别人的因子"))
+        store.save_one(tmp_path, _definition("uf_listed", "别人的因子"))
+    try:
+        with tenant.user_scope(2):
+            ids = {f["id"] for f in client.get("/api/factors").json()["factors"]}
+            assert "uf_listed" not in ids
+            assert "uf_listed" in store.hidden_ids(tmp_path)
+        with tenant.user_scope(1):
+            rows = {f["id"]: f for f in client.get("/api/factors").json()["factors"]}
+            assert rows["uf_listed"]["formula"] == "close - open"
+    finally:
+        unregister_factor("uf_listed")

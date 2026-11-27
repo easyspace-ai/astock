@@ -217,6 +217,18 @@ def visible_owned(data_dir: Path) -> list[tuple[int | None, dict]]:
     ]
 
 
+def hidden_ids(data_dir: Path) -> set[str]:
+    """他人账号持有、当前账号不该看到的定义 id; 无账号上下文(全局模式)时为空。
+
+    供「列出/按 id 复检」等展示面做过滤 —— 编译层仍要吃全站并集(共享 enriched
+    表只有一份), 所以过滤只能放在出口, 不能改 load_all。
+    """
+    if tenant.current_user_id() is None:
+        return set()
+    visible = {str(item.get("id")) for _owner, item in visible_owned(data_dir)}
+    return {str(item.get("id")) for _owner, item in iter_owned(data_dir)} - visible
+
+
 def load_all(data_dir: Path) -> list[dict]:
     """全部自定义信号 (账号 + 共享并集)。损坏的文件被跳过。"""
     return [sig for _owner, sig in iter_owned(data_dir)]

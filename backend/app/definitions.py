@@ -280,11 +280,16 @@ def smoke_stored(kind: str, definition_id: str, data_dir: Path) -> dict:
     from app.strategy import custom_signals
 
     if kind == "signal":
+        hidden = custom_signals.hidden_ids(data_dir)
         definitions = custom_signals.load_all(data_dir)
     elif kind == "factor":
+        hidden = factor_store.hidden_ids(data_dir)
         definitions = factor_store.load_all(data_dir)
     else:
         raise HTTPException(status_code=422, detail=f"未知 kind: {kind}")
+    if definition_id in hidden:
+        # 他人账号的定义: 按 id 也当不存在, 不泄露存在性
+        raise HTTPException(status_code=404, detail=f"定义不存在: {kind}/{definition_id}")
     for definition in definitions:
         if definition.get("id") == definition_id:
             return smoke_definition(kind, definition)
@@ -297,7 +302,11 @@ def catalog(data_dir: Path) -> list[dict]:
     from app.strategy import custom_signals
 
     items: list[dict] = []
+    hidden_signals = custom_signals.hidden_ids(data_dir)
+    hidden_factors = factor_store.hidden_ids(data_dir)
     for sig in custom_signals.load_all(data_dir):
+        if str(sig.get("id")) in hidden_signals:
+            continue
         items.append({
             "kind": "signal",
             "id": sig.get("id"),
@@ -309,6 +318,8 @@ def catalog(data_dir: Path) -> list[dict]:
             "dependencies": sorted(definition_dependencies("signal", sig)),
         })
     for definition in factor_store.load_all(data_dir):
+        if str(definition.get("id")) in hidden_factors:
+            continue
         item = {
             "kind": "factor",
             "id": definition.get("id"),

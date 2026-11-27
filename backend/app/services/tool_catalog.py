@@ -132,9 +132,23 @@ def build_tool_schemas() -> list[dict[str, Any]]:
     ]
 
 
-def list_factors(asset_type: str | None = None, stable_only: bool = False) -> dict[str, Any]:
-    """序列化因子目录: factors/registry.py 的 FactorSpec → 精简 dict 列表。"""
+def list_factors(
+    asset_type: str | None = None,
+    stable_only: bool = False,
+    data_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """序列化因子目录: factors/registry.py 的 FactorSpec → 精简 dict 列表。
+
+    data_dir 给定时按「本人 + 共享」过滤: 他人账号的私有因子(含 formula_text)
+    不进 AI 助手的工具结果。
+    """
+    from app.factors import store as factors_store
     from app.factors.registry import all_factors
+
+    try:
+        hidden = factors_store.hidden_ids(Path(data_dir)) if data_dir is not None else set()
+    except (AttributeError, TypeError):
+        hidden = set()
 
     factors = [
         {
@@ -149,6 +163,7 @@ def list_factors(asset_type: str | None = None, stable_only: bool = False) -> di
             "pit": spec.pit,
         }
         for spec in all_factors(asset_type=asset_type, stable_only=stable_only)
+        if spec.id not in hidden
     ]
     return {"factors": factors}
 
@@ -283,6 +298,7 @@ async def execute_tool(
             result = list_factors(
                 asset_type=args.get("asset_type"),
                 stable_only=bool(args.get("stable_only", False)),
+                data_dir=data_dir,
             )
         elif name == LIST_STRATEGIES:
             if engine is None:

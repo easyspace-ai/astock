@@ -231,7 +231,7 @@ async def test_ai_generate_endpoint_success(monkeypatch):
     import app.services.ai_provider as ai_provider
 
     monkeypatch.setattr(ai_provider, "generate_ai_text", fake_generate)
-    result = await ai_generate_signal(AIGenerateRequest(description="回踩MA20且放量"))
+    result = await ai_generate_signal(AIGenerateRequest(description="回踩MA20且放量"), None)
     assert result["name"] == "回踩MA20放量"
     assert len(result["conditions"]) == 2
     # 复杂描述 (多条件) 不设输出上限: 推理模型思考 token 计入 max_tokens 预算,
@@ -251,14 +251,14 @@ async def test_ai_generate_endpoint_400_on_invalid_conditions(monkeypatch):
 
     monkeypatch.setattr(ai_provider, "generate_ai_text", fake_generate)
     with pytest.raises(HTTPException) as exc_info:
-        await ai_generate_signal(AIGenerateRequest(description="测试"))
+        await ai_generate_signal(AIGenerateRequest(description="测试"), None)
     assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_ai_generate_endpoint_400_on_empty_description():
     with pytest.raises(HTTPException) as exc_info:
-        await ai_generate_signal(AIGenerateRequest(description="   "))
+        await ai_generate_signal(AIGenerateRequest(description="   "), None)
     assert exc_info.value.status_code == 400
 
 
@@ -271,6 +271,6 @@ async def test_ai_generate_endpoint_passes_runtime_error(monkeypatch):
 
     monkeypatch.setattr(ai_provider, "generate_ai_text", fake_generate)
     with pytest.raises(HTTPException) as exc_info:
-        await ai_generate_signal(AIGenerateRequest(description="测试"))
+        await ai_generate_signal(AIGenerateRequest(description="测试"), None)
     assert exc_info.value.status_code == 400
     assert "AI API Key" in exc_info.value.detail
