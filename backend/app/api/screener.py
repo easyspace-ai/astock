@@ -26,6 +26,10 @@ from app.strategy import config as strategy_config
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
+# 全市场快照/连板梯队是多个页面共用的轻量读接口 (看板、概念/行业板块、连板梯队)。
+# 单独挂路由, 才能按「消费页面」放行, 而不必把策略运行/缓存结果一起开放给
+# 只勾选了这些页面的账号。见 services/page_access.py 的 "screener_shared"。
+shared_router = APIRouter(prefix="/api/screener", tags=["screener"])
 
 
 def _admit_submission(request: Request) -> None:
@@ -764,7 +768,7 @@ def get_cached_result(
     }
 
 
-@router.get("/market-snapshot")
+@shared_router.get("/market-snapshot")
 def market_snapshot(request: Request):
     """最新全市场轻量行情快照，供板块/概念聚合分析使用。"""
     import polars as pl
@@ -1118,7 +1122,7 @@ def run_all(request: Request, body: Optional[dict] = None):
     }
 
 
-@router.get("/limit-ladder")
+@shared_router.get("/limit-ladder")
 def limit_ladder(
     request: Request,
     as_of: Optional[date] = None,

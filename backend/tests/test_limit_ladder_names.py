@@ -6,7 +6,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.screener import router
+from app.api.screener import router, shared_router
 
 
 @pytest.mark.parametrize("direction", ["up", "down"])
@@ -34,6 +34,7 @@ def test_ladder_fills_partial_names_from_instruments(tmp_path, direction, cache_
     )
     app = FastAPI()
     app.include_router(router)
+    app.include_router(shared_router)
     app.state.repo = repo
     app.state.depth_service = SimpleNamespace(
         get_sealed_map=lambda *args, **kwargs: {}, is_sealed_ready=lambda *args: False,

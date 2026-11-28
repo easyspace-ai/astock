@@ -6,7 +6,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useIsAdmin } from '@/lib/useAccount'
+import { useAccountUser, useIsAdmin } from '@/lib/useAccount'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowDown,
@@ -40,6 +40,7 @@ import {
   type QuickSuggest,
 } from '../client'
 import {
+  bindAssistantAccount,
   deleteSession,
   newSession,
   retryLast,
@@ -60,6 +61,12 @@ type SessionMessages = ReturnType<typeof useAssistantStore>['sessions'][number][
 
 export function AssistantPage() {
   const { sessions, activeId, sending } = useAssistantStore()
+  const me = useAccountUser()
+  // 兜底绑定 (常驻宿主也会绑定): 保证直接打开 /assistant 时历史也只显示本账号的。
+  const accountId = me.data?.id ?? null
+  useEffect(() => {
+    bindAssistantAccount(accountId)
+  }, [accountId])
   const active = sessions.find(s => s.id === activeId) ?? null
   const messages = active?.messages ?? []
   const [status, setStatus] = useState<AssistantStatus | null>(null)

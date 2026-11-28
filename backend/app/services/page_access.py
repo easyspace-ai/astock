@@ -44,6 +44,15 @@ PAGE_ACCESS: dict[str, tuple[str, ...]] = {
         rbac.PAGE_DEV,
     ),
     "screener": (rbac.PAGE_SCREENER,),
+    # 全市场快照 (/market-snapshot) 与连板梯队 (/limit-ladder) 是聚合读接口, 由
+    # 看板、概念/行业板块、连板梯队页共同消费; 策略运行与结果缓存仍只属于策略页。
+    "screener_shared": (
+        rbac.PAGE_SCREENER,
+        rbac.PAGE_DASHBOARD,
+        rbac.PAGE_EXT_LIMIT_LADDER,
+        rbac.PAGE_EXT_CONCEPT_ANALYSIS,
+        rbac.PAGE_EXT_INDUSTRY_ANALYSIS,
+    ),
     # 因子数据也被回测的「加因子信号」弹窗读取
     "factors": (rbac.PAGE_FACTORS, rbac.PAGE_BACKTEST),
     "backtest": (rbac.PAGE_BACKTEST,),

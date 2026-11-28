@@ -97,6 +97,7 @@ def client(tmp_path, monkeypatch):
         get_sealed_map=lambda *args, **kwargs: {}, is_sealed_ready=lambda _: False,
     )
     app.include_router(screener.router)
+    app.include_router(screener.shared_router)
     app.include_router(watchlist.router)
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client

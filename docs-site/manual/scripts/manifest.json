@@ -1,0 +1,271 @@
+{
+  "groups": [
+    {
+      "title": "交付信息",
+      "items": [
+        {
+          "id": "cover",
+          "label": "交付概览"
+        },
+        {
+          "id": "access",
+          "label": "访问与登录"
+        },
+        {
+          "id": "overview",
+          "label": "系统总览与菜单"
+        },
+        {
+          "id": "workflow",
+          "label": "每日使用流程"
+        }
+      ]
+    },
+    {
+      "title": "使用说明",
+      "items": [
+        {
+          "id": "m-dash",
+          "label": "看板"
+        },
+        {
+          "id": "m-watchlist",
+          "label": "自选"
+        },
+        {
+          "id": "m-strategy",
+          "label": "策略"
+        },
+        {
+          "id": "m-factor",
+          "label": "因子"
+        },
+        {
+          "id": "m-signal",
+          "label": "信号库与持仓提醒"
+        },
+        {
+          "id": "m-backtest",
+          "label": "回测"
+        },
+        {
+          "id": "m-stock",
+          "label": "个股分析"
+        },
+        {
+          "id": "m-ladder",
+          "label": "连板梯队"
+        },
+        {
+          "id": "m-board",
+          "label": "概念与行业"
+        },
+        {
+          "id": "m-aux",
+          "label": "辅助页面速览"
+        },
+        {
+          "id": "m-fin",
+          "label": "财务分析"
+        },
+        {
+          "id": "m-monitor",
+          "label": "监控中心与通知"
+        },
+        {
+          "id": "m-paper",
+          "label": "模拟盘与持仓"
+        },
+        {
+          "id": "m-ai",
+          "label": "AI 复盘与 AI 助手"
+        },
+        {
+          "id": "m-index",
+          "label": "指数"
+        },
+        {
+          "id": "m-data",
+          "label": "数据管理"
+        },
+        {
+          "id": "m-settings",
+          "label": "设置、账号与权限"
+        }
+      ]
+    },
+    {
+      "title": "交付条款",
+      "items": [
+        {
+          "id": "notes",
+          "label": "注意事项"
+        },
+        {
+          "id": "fields",
+          "label": "字段说明"
+        },
+        {
+          "id": "faq",
+          "label": "常见问题"
+        },
+        {
+          "id": "accept",
+          "label": "交付验收与支持"
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "cover",
+      "file": "index.md",
+      "title": "cover",
+      "chapter": true
+    },
+    {
+      "id": "access",
+      "file": "access.md",
+      "title": "访问与登录",
+      "chapter": true
+    },
+    {
+      "id": "overview",
+      "file": "overview.md",
+      "title": "系统总览与菜单",
+      "chapter": true
+    },
+    {
+      "id": "workflow",
+      "file": "workflow.md",
+      "title": "每日使用流程",
+      "chapter": true
+    },
+    {
+      "id": "m-dash",
+      "file": "modules/dash.md",
+      "title": "看板",
+      "chapter": false
+    },
+    {
+      "id": "m-watchlist",
+      "file": "modules/watchlist.md",
+      "title": "自选",
+      "chapter": false
+    },
+    {
+      "id": "m-strategy",
+      "file": "modules/strategy.md",
+      "title": "策略",
+      "chapter": false
+    },
+    {
+      "id": "m-factor",
+      "file": "modules/factor.md",
+      "title": "因子",
+      "chapter": false
+    },
+    {
+      "id": "m-signal",
+      "file": "modules/signal.md",
+      "title": "信号库与持仓提醒",
+      "chapter": false
+    },
+    {
+      "id": "m-backtest",
+      "file": "modules/backtest.md",
+      "title": "回测",
+      "chapter": false
+    },
+    {
+      "id": "m-stock",
+      "file": "modules/stock.md",
+      "title": "个股分析",
+      "chapter": false
+    },
+    {
+      "id": "m-ladder",
+      "file": "modules/ladder.md",
+      "title": "连板梯队",
+      "chapter": false
+    },
+    {
+      "id": "m-board",
+      "file": "modules/board.md",
+      "title": "概念与行业",
+      "chapter": false
+    },
+    {
+      "id": "m-aux",
+      "file": "modules/aux.md",
+      "title": "辅助页面速览",
+      "chapter": false
+    },
+    {
+      "id": "m-fin",
+      "file": "modules/fin.md",
+      "title": "财务分析",
+      "chapter": false
+    },
+    {
+      "id": "m-monitor",
+      "file": "modules/monitor.md",
+      "title": "监控中心与通知",
+      "chapter": false
+    },
+    {
+      "id": "m-paper",
+      "file": "modules/paper.md",
+      "title": "模拟盘与持仓",
+      "chapter": false
+    },
+    {
+      "id": "m-ai",
+      "file": "modules/ai.md",
+      "title": "AI 复盘与 AI 助手",
+      "chapter": false
+    },
+    {
+      "id": "m-index",
+      "file": "modules/index.md",
+      "title": "指数",
+      "chapter": false
+    },
+    {
+      "id": "m-data",
+      "file": "modules/data.md",
+      "title": "数据管理",
+      "chapter": false
+    },
+    {
+      "id": "m-settings",
+      "file": "modules/settings.md",
+      "title": "设置、账号与权限",
+      "chapter": false
+    },
+    {
+      "id": "notes",
+      "file": "notes.md",
+      "title": "注意事项",
+      "chapter": true
+    },
+    {
+      "id": "fields",
+      "file": "fields.md",
+      "title": "字段说明",
+      "chapter": true
+    },
+    {
+      "id": "faq",
+      "file": "faq.md",
+      "title": "常见问题",
+      "chapter": true
+    },
+    {
+      "id": "accept",
+      "file": "accept.md",
+      "title": "交付验收与支持",
+      "chapter": true
+    }
+  ]
+}

@@ -9,7 +9,8 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { FrontendSlotContextMap } from '@/extensions/types'
-import { setPageContext } from './store'
+import { useAccountUser } from '@/lib/useAccount'
+import { bindAssistantAccount, setPageContext } from './store'
 
 type NavigationContext = FrontendSlotContextMap['layout.navigation.extra']
 type AnySlotContext = FrontendSlotContextMap[keyof FrontendSlotContextMap]
@@ -40,6 +41,13 @@ const PAGE_LABELS: Record<string, string> = {
 export function AssistantHost(props: AnySlotContext) {
   const { pathname } = props as NavigationContext
   const navigate = useNavigate()
+  const me = useAccountUser()
+
+  // 会话历史按账号分区: 身份确定后绑定, 切换账号即重载, 未登录不读任何历史。
+  const accountId = me.data?.id ?? null
+  useEffect(() => {
+    bindAssistantAccount(accountId)
+  }, [accountId])
 
   useEffect(() => {
     setPageContext({ page: PAGE_LABELS[pathname] ?? '' })

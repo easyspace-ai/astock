@@ -1,0 +1,286 @@
+/**
+ * 交付说明书的版式：沿用旧版单文件 HTML（docs-site/delivery-manual.html）的设计令牌，
+ * 只把它套到 VitePress 默认主题的内容区上，保证网页版与 PDF 版观感一致。
+ * 改配色/字号只改这里的变量。
+ */
+:root {
+  --tsp-accent: #4f46e5;
+  --tsp-accent-soft: #eef2ff;
+  --tsp-tip-bg: #ecfdf5;
+  --tsp-tip-border: #34d399;
+  --tsp-warn-bg: #fff7ed;
+  --tsp-warn-border: #fdba74;
+  --tsp-danger-bg: #fef2f2;
+  --tsp-danger-border: #f87171;
+
+  --vp-c-brand-1: #4f46e5;
+  --vp-c-brand-2: #4338ca;
+  --vp-c-brand-3: #3730a3;
+  --vp-c-brand-soft: #eef2ff;
+  --vp-font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --vp-font-family-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.dark {
+  --tsp-accent: #818cf8;
+  --tsp-accent-soft: #1e2235;
+  --tsp-tip-bg: #0f241c;
+  --tsp-tip-border: #059669;
+  --tsp-warn-bg: #2a1d10;
+  --tsp-warn-border: #b45309;
+  --tsp-danger-bg: #2a1414;
+  --tsp-danger-border: #b91c1c;
+
+  --vp-c-brand-1: #818cf8;
+  --vp-c-brand-2: #a5b4fc;
+  --vp-c-brand-3: #c7d2fe;
+  --vp-c-brand-soft: #1e2235;
+}
+
+/* ---------- 正文排版 ---------- */
+.vp-doc {
+  line-height: 1.75;
+  font-size: 15px;
+}
+
+.vp-doc h1 {
+  font-size: 27px;
+  letter-spacing: -0.01em;
+  margin-bottom: 10px;
+}
+
+.vp-doc h2 {
+  font-size: 19px;
+  margin: 30px 0 10px;
+  padding: 0 0 6px;
+  border-top: none;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.vp-doc h3 {
+  font-size: 15.5px;
+  margin: 20px 0 8px;
+}
+
+.vp-doc p {
+  margin: 10px 0;
+}
+
+.vp-doc li {
+  margin: 6px 0;
+}
+
+.vp-doc code {
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+
+/* ---------- 表格（旧版样式：表头品牌紫、隔行浅底、表头不换行） ---------- */
+.vp-doc table {
+  display: table;
+  width: 100%;
+  margin: 14px 0;
+  font-size: 13.5px;
+}
+
+.vp-doc th,
+.vp-doc td {
+  border: 1px solid var(--vp-c-divider);
+  padding: 8px 11px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.vp-doc th {
+  background: var(--tsp-accent-soft);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.vp-doc tr:nth-child(2n) td {
+  background: color-mix(in srgb, var(--tsp-accent-soft) 30%, transparent);
+}
+
+.vp-doc tr {
+  background: transparent;
+}
+
+/* ---------- 提示框（::: tip / warning / danger） ---------- */
+.vp-doc .custom-block {
+  border: 1px solid;
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin: 16px 0;
+  font-size: inherit;
+}
+
+.vp-doc .custom-block .custom-block-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.vp-doc .custom-block p {
+  margin: 6px 0;
+}
+
+.vp-doc .custom-block.tip {
+  background: var(--tsp-tip-bg);
+  border-color: var(--tsp-tip-border);
+  color: inherit;
+}
+
+.vp-doc .custom-block.warning {
+  background: var(--tsp-warn-bg);
+  border-color: var(--tsp-warn-border);
+  color: inherit;
+}
+
+.vp-doc .custom-block.danger {
+  background: var(--tsp-danger-bg);
+  border-color: var(--tsp-danger-border);
+  color: inherit;
+}
+
+/* ---------- 截图 ---------- */
+.vp-doc .manual-figure {
+  margin: 18px 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--vp-c-bg);
+}
+
+.vp-doc .manual-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: zoom-in;
+  border-radius: 0;
+  margin: 0;
+}
+
+.vp-doc .manual-figure figcaption {
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--vp-c-text-2);
+  border-top: 1px solid var(--vp-c-divider);
+}
+
+.manual-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(14, 16, 21, 0.88);
+  cursor: zoom-out;
+}
+
+.manual-lightbox img {
+  max-width: 96vw;
+  max-height: 88vh;
+  width: auto;
+  border-radius: 8px;
+  background: #fff;
+  cursor: zoom-out;
+}
+
+.manual-lightbox-tip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 14px;
+  text-align: center;
+  color: #c9cdd6;
+  font-size: 12.5px;
+}
+
+/* ---------- 封面 / KPI / 页脚：来自旧版 HTML 的原始块 ---------- */
+.vp-doc .cover {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 16px;
+  background: var(--vp-c-bg);
+  padding: 34px 34px 26px;
+  margin: 8px 0 26px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.vp-doc .cover .eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--tsp-accent);
+}
+
+.vp-doc .cover h1 {
+  font-size: 34px;
+  margin: 10px 0 6px;
+}
+
+.vp-doc .cover .sub {
+  font-size: 16px;
+  color: var(--vp-c-text-2);
+  margin-bottom: 22px;
+}
+
+.vp-doc .meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px 22px;
+  font-size: 13.5px;
+}
+
+.vp-doc .meta div {
+  border-top: 1px solid var(--vp-c-divider);
+  padding-top: 8px;
+}
+
+.vp-doc .meta b {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--vp-c-text-2);
+  margin-bottom: 2px;
+}
+
+.vp-doc .kpi {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.vp-doc .kpi div {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--vp-c-bg);
+}
+
+.vp-doc .kpi b {
+  display: block;
+  font-size: 19px;
+  color: var(--tsp-accent);
+}
+
+.vp-doc .kpi span {
+  font-size: 12.5px;
+  color: var(--vp-c-text-2);
+}
+
+.vp-doc .footer {
+  margin-top: 40px;
+  padding-top: 18px;
+  border-top: 1px solid var(--vp-c-divider);
+  color: var(--vp-c-text-2);
+  font-size: 12.5px;
+}
+
+.vp-doc .footer p {
+  margin: 4px 0;
+}

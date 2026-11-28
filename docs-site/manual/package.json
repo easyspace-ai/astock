@@ -1,0 +1,17 @@
+{
+  "name": "tsp-manual",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev --port 5199",
+    "build": "vitepress build",
+    "preview": "vitepress preview --port 5199",
+    "pdf": "node scripts/build-print.mjs"
+  },
+  "devDependencies": {
+    "markdown-it": "^14.1.0",
+    "markdown-it-container": "^4.0.0",
+    "vitepress": "^1.6.3"
+  }
+}

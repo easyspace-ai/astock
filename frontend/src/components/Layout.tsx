@@ -36,6 +36,7 @@ import { GlobalSearch } from './shell/GlobalSearch'
 import { NavPanel } from './shell/NavPanel'
 import { HeaderRealtime } from './shell/HeaderRealtime'
 import { HeaderAccount } from './shell/HeaderAccount'
+import { HelpDocLink } from './shell/HelpDocLink'
 import { ThemeToggle } from './shell/ThemeToggle'
 import {
   Loader2,
@@ -493,6 +494,8 @@ export function Layout() {
             />
             <BrandThemePicker />
             <ThemeToggle />
+            {/* 帮助文档（/manual 交付说明书）固定放在账号入口前 */}
+            <HelpDocLink />
             <HeaderAccount isAdmin={isAdmin} />
           </>
         )}

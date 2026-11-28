@@ -7,10 +7,16 @@
 ```text
 docs-site/
 ├── index.html            # 产品手册（面向部署者与最终用户）
-├── delivery-manual.html  # 客户交付说明书：访问方式/使用说明/注意事项/字段说明（单文件，截图与 Logo 已内联，可直接发给客户）
-├── 财富引擎-交付说明书.pdf  # 上述 HTML 的打印版（54 页），随 HTML 一并更新
+├── delivery-manual.html  # [迁移前的旧版] 客户交付说明书单文件，已由 manual/ 取代，勿再手改
+├── 财富引擎-交付说明书.pdf  # [迁移前的旧版] 上述 HTML 的打印版（54 页）
+├── manual/               # 交付说明书的 Markdown 源 + VitePress 站点（现行维护入口，见 manual/README.md）
 └── README.md             # 本维护说明
 ```
+
+交付说明书自 2026-11-27 起改为「一章一个 MD」，网页版由 VitePress 构建，PDF 由 `npm run pdf` 生成；
+日常修改只动 `manual/` 下的 Markdown，别再改 `delivery-manual.html`。
+
+线上访问：`http://<部署实例>:3018/manual/`（后端挂载 `manual/.vitepress/dist`，发布用 `scripts/deploy_remote.sh --manual`）。
 
 品牌 Logo 引用 `../brand/` 下的 SVG；移动 `docs-site/` 时请保持与 `brand/` 的相对位置，或把图片改为本地内联/同目录引用。
 

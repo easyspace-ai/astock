@@ -28,7 +28,13 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def _client(user: dict | None, data_dir: Path | None = None) -> TestClient:
     """挂真实业务路由，按生产同一份 PAGE_ACCESS 映射加页面依赖。"""
     app = FastAPI()
-    app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=data_dir))
+    # 空数据目录: 守卫通过后由业务实现应答 (无数据日期 → 400/空列表), 只用于
+    # 区分「守卫放行」和 403。
+    app.state.repo = SimpleNamespace(
+        store=SimpleNamespace(data_dir=data_dir),
+        enriched_latest_date=lambda: None,
+        get_enriched_latest_asset=lambda asset: (None, None),
+    )
     for module, name in (
         (factors_api, "factors"),
         (screener_api, "screener"),
@@ -41,6 +47,12 @@ def _client(user: dict | None, data_dir: Path | None = None) -> TestClient:
                 Depends(permissions_api.require_page_access(*page_access.PAGE_ACCESS[name]))
             ],
         )
+    app.include_router(
+        screener_api.shared_router,
+        dependencies=[
+            Depends(permissions_api.require_page_access(*page_access.PAGE_ACCESS["screener_shared"]))
+        ],
+    )
 
     @app.middleware("http")
     async def inject_user(request: Request, call_next):
@@ -94,6 +106,25 @@ def test_shared_factor_route_allows_backtest_page(data_dir):
     client = _client(user)
     assert client.get("/api/factors").status_code == 200
     assert client.get("/api/screener/cached-summary").status_code == 403
+
+
+def test_extension_page_consumer_can_read_shared_screener_data(data_dir):
+    """概念/行业/连板页只勾选了自身页面权限, 也要能读全市场快照与连板梯队。
+
+    这两个接口由多个页面共用, 不能只放行策略页; 策略运行/结果缓存仍须 403。
+    """
+    pages = [
+        rbac.PAGE_EXT_LIMIT_LADDER,
+        rbac.PAGE_EXT_CONCEPT_ANALYSIS,
+        rbac.PAGE_EXT_INDUSTRY_ANALYSIS,
+    ]
+    for page_key in pages:
+        user = _user_with([page_key], f"{page_key}@example.com")
+        client = _client(user)
+        # 页面权限守卫通过后由业务实现应答(空数据目录下可能非 200), 只要不是 403。
+        assert client.get("/api/screener/limit-ladder").status_code != 403, page_key
+        assert client.get("/api/screener/market-snapshot").status_code != 403, page_key
+        assert client.get("/api/screener/cached-summary").status_code == 403, page_key
 
 
 def test_user_without_any_page_is_fail_closed(data_dir):

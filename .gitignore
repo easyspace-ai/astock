@@ -160,3 +160,6 @@ reports/cursor_tickflow_pro_rate_limit_p0.bundle
 
 # 协议变更工作文档 (含贡献者个人信息, 自述不入库 — CONTRIBUTING §8/§14.4)
 relicensing/
+
+# 交付说明书 PDF/单文件产物
+docs-site/manual/dist-print/

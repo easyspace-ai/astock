@@ -72,7 +72,7 @@ from app.extensions.loader import (
     current_extension_context,
     start_backend_extensions,
 )
-from app.frontend_static import FrontendStaticFiles, frontend_file_response
+from app.frontend_static import FrontendStaticFiles, ManualStaticFiles, frontend_file_response
 from app.jobs import daily_pipeline
 from app.services import page_access
 from app.services.daily_health import DailyIntegrityError
@@ -860,6 +860,7 @@ app.include_router(system_api.router)
 app.include_router(kline.router, dependencies=_page_deps("kline"))
 app.include_router(watchlist.router, dependencies=_page_deps("watchlist"))
 app.include_router(screener.router, dependencies=_page_deps("screener"))
+app.include_router(screener.shared_router, dependencies=_page_deps("screener_shared"))
 app.include_router(backtest.router, dependencies=_page_deps("backtest"))
 app.include_router(factors.router, dependencies=_page_deps("factors"))
 app.include_router(definitions.router, dependencies=_page_deps("definitions"))
@@ -1003,6 +1004,12 @@ def _register_static_routes(target: FastAPI, static_dir: Path) -> None:
         assets = FrontendStaticFiles(directory=static_dir / "assets")
         target.mount("/assets", assets, name="assets")
         target.mount(asset_base, assets, name="versioned-assets")
+
+    # 交付说明书（客户文档站）：独立产物，含 cleanUrls 回退；必须在 SPA 兜底之前挂载。
+    # 内容本身就是对外交付物，故不做登录校验。
+    manual_dir = Path(settings.manual_dir)
+    if (manual_dir / "index.html").exists():
+        target.mount("/manual", ManualStaticFiles(directory=manual_dir, html=True), name="manual")
 
     # 旧地址在服务端直接跳到独立管理后台, 不必等前端 JS 再重定向。
     # /settings 曾是多用户改造前的「设置」页, 现统一为 /admin。

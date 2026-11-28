@@ -268,6 +268,11 @@ class Settings(BaseSettings):
     # 静态文件(前端 dist) — frozen: 资源目录的 static/; 非 frozen: frontend/dist
     static_dir: Path = _RESOURCE_ROOT / "static" if _IS_FROZEN else (_PROJECT_ROOT / "frontend" / "dist")
 
+    # 交付说明书静态站(VitePress 产物), 挂到 /manual; 目录不存在时整段跳过。
+    manual_dir: Path = _RESOURCE_ROOT / "manual" if _IS_FROZEN else (
+        _PROJECT_ROOT / "docs-site" / "manual" / ".vitepress" / "dist"
+    )
+
     @model_validator(mode="after")
     def _resolve_paths(self) -> Settings:
         """Docker 相对路径按应用目录解析；源码、桌面和绝对路径契约不变。"""
